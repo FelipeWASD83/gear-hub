@@ -149,7 +149,23 @@ internal sealed class DsxGear : Gear
         return g;
     }
 
-    private List<DsxApi.Pad>? Send(params (int, int[])[] ins) => _port is int p ? DsxApi.Send(p, DsxApi.Packet(ins)) : null;
+    private bool _changed;
+
+    private List<DsxApi.Pad>? Send(params (int, int[])[] ins)
+    {
+        if (ins.Any(i => i.Item1 != DsxApi.GetStatus && i.Item1 != DsxApi.ResetToUser)) _changed = true;
+        return _port is int p ? DsxApi.Send(p, DsxApi.Packet(ins)) : null;
+    }
+
+    public override bool HasChanges => _changed;
+
+    /// <summary>DSX's own "back to the user's settings".</summary>
+    public override string? RestoreOriginal()
+    {
+        if (!_changed) return null;
+        _changed = false;
+        return Send((DsxApi.ResetToUser, new[] { 0 })) != null ? Lang.T("DSX: perfil dele", "DSX: its profile") : null;
+    }
 
     public override void Poll()
     {

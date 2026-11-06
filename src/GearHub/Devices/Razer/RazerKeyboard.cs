@@ -110,6 +110,7 @@ internal sealed class RazerKeyboard : Gear
 
     public bool WriteSnapTap(bool enabled, IReadOnlyList<SnapPair> pairs)
     {
+        RememberSnap();
         bool ok = Command(RazerProtocol.SetSnapTap, RazerProtocol.SnapTapArgs(RazerProtocol.LiveSlot, enabled, pairs)) != null;
         if (ok)
         {
@@ -142,6 +143,7 @@ internal sealed class RazerKeyboard : Gear
 
     public bool WriteActuation(IReadOnlyList<KeyActuation> keys)
     {
+        RememberActuation(keys.Select(k => k.Key));
         bool ok = true;
         foreach (var chunk in keys.Chunk(RazerProtocol.ActuationPerCall))
         {
@@ -164,6 +166,7 @@ internal sealed class RazerKeyboard : Gear
 
     public bool WriteRapid(IReadOnlyList<KeyRapidTrigger> keys)
     {
+        RememberRapid(keys.Select(k => k.Key));
         bool ok = true;
         foreach (var chunk in keys.Chunk(RazerProtocol.RapidPerCall))
         {
@@ -185,6 +188,7 @@ internal sealed class RazerKeyboard : Gear
 
     public bool WritePolling(int hz)
     {
+        RememberPolling();
         foreach (var (code, rate) in RazerProtocol.PollingRates)
             if (rate == hz) return Command(RazerProtocol.SetHighPolling, new byte[] { RazerProtocol.LiveSlot, code }) != null;
         return false;
@@ -194,8 +198,11 @@ internal sealed class RazerKeyboard : Gear
     public int ReadBrightness() =>
         Command(RazerProtocol.GetBrightness, new byte[] { 1, 0 }) is { Length: >= 3 } d ? d[2] : -1;
 
-    public bool WriteBrightness(int value) =>
-        Command(RazerProtocol.SetBrightness, new byte[] { 1, 0, (byte)Math.Clamp(value, 0, 255) }) != null;
+    public bool WriteBrightness(int value)
+    {
+        RememberBrightness();
+        return Command(RazerProtocol.SetBrightness, new byte[] { 1, 0, (byte)Math.Clamp(value, 0, 255) }) != null;
+    }
 
     /// <summary>The keyboard's current Chroma effect: id, flags, rate, colours (null when it does not say).</summary>
     public (byte Effect, byte Flags, byte Rate, List<System.Windows.Media.Color> Colors)? ReadChroma()
@@ -208,6 +215,7 @@ internal sealed class RazerKeyboard : Gear
 
     public bool WriteChroma(byte effect, byte flags, byte rate, IReadOnlyList<System.Windows.Media.Color> colors)
     {
+        RememberChroma();
         var args = RazerProtocol.ChromaArgs(effect, flags, rate, colors.Select(c => (c.R, c.G, c.B)).ToList());
         return Command(RazerProtocol.SetChromaEffect, args, args.Length) != null;
     }
@@ -239,6 +247,152 @@ internal sealed class RazerKeyboard : Gear
     /// </summary>
     public ushort? ReadDepth(byte key) =>
         Command(RazerProtocol.GetAnalogAdc, new byte[] { 0, key }) is { Length: >= 4 } d ? (ushort)(d[2] << 8 | d[3]) : null;
+
+
+    // ---- what the keyboard had before the hub's first change (given back when the hub quits) ----
+    private readonly object _baseGate = new();
+    private bool _restoring;
+    private string? _baseProfile;
+    private SnapTapState? _baseSnap;
+    private readonly Dictionary<byte, KeyActuation> _baseAct = new();
+    private readonly Dictionary<byte, KeyRapidTrigger> _baseRapid = new();
+    private int? _basePolling, _baseBrightness;
+    private (byte Effect, byte Flags, byte Rate, List<System.Windows.Media.Color> Colors)? _baseChroma;
+    private readonly SynapseLog _synapse = new(746);
+
+    public override bool HasChanges
+    {
+        get
+        {
+            lock (_baseGate)
+                return _baseSnap != null || _baseAct.Count > 0 || _baseRapid.Count > 0 || _basePolling != null || _baseBrightness != null || _baseChroma != null;
+        }
+    }
+
+    /// <summary>
+    /// A Synapse profile switch rewrites the live slot with Synapse's own values: what was remembered before it is
+    /// no longer what to give back, so it is dropped.
+    /// </summary>
+    private void FollowSynapse()
+    {
+        string? now = _synapse.Poll();
+        lock (_baseGate)
+        {
+            if (_baseProfile != null && now != null && now != _baseProfile && HasChanges)
+            {
+                Log.Write($"razer: Synapse switched to {_synapse.ActiveName ?? now}; it rewrote the keyboard, nothing of ours to give back");
+                ClearBaseline();
+            }
+        }
+    }
+
+    private void ClearBaseline()
+    {
+        _baseSnap = null;
+        _baseAct.Clear();
+        _baseRapid.Clear();
+        _basePolling = _baseBrightness = null;
+        _baseChroma = null;
+        _baseProfile = null;
+    }
+
+    private void Started()
+    {
+        if (!HasChanges) _baseProfile = _synapse.Poll();
+    }
+
+    private void RememberSnap()
+    {
+        if (_restoring) return;
+        FollowSynapse();
+        lock (_baseGate) { if (_baseSnap != null) return; Started(); }
+        var s = ReadSnapTap();
+        lock (_baseGate) _baseSnap ??= s;
+    }
+
+    private void RememberActuation(IEnumerable<byte> keys)
+    {
+        if (_restoring) return;
+        FollowSynapse();
+        List<byte> missing;
+        lock (_baseGate) { Started(); missing = keys.Where(k => !_baseAct.ContainsKey(k)).Distinct().ToList(); }
+        if (missing.Count == 0) return;
+        var read = ReadActuation(missing);
+        lock (_baseGate) foreach (var a in read) _baseAct.TryAdd(a.Key, a);
+    }
+
+    private void RememberRapid(IEnumerable<byte> keys)
+    {
+        if (_restoring) return;
+        FollowSynapse();
+        List<byte> missing;
+        lock (_baseGate) { Started(); missing = keys.Where(k => !_baseRapid.ContainsKey(k)).Distinct().ToList(); }
+        if (missing.Count == 0) return;
+        var read = ReadRapid(missing);
+        lock (_baseGate) foreach (var r in read) _baseRapid.TryAdd(r.Key, r);
+    }
+
+    private void RememberPolling()
+    {
+        if (_restoring) return;
+        FollowSynapse();
+        lock (_baseGate) { if (_basePolling != null) return; Started(); }
+        int hz = ReadPolling();
+        lock (_baseGate) if (hz > 0) _basePolling ??= hz;
+    }
+
+    private void RememberBrightness()
+    {
+        if (_restoring) return;
+        FollowSynapse();
+        lock (_baseGate) { if (_baseBrightness != null) return; Started(); }
+        int b = ReadBrightness();
+        lock (_baseGate) if (b >= 0) _baseBrightness ??= b;
+    }
+
+    private void RememberChroma()
+    {
+        if (_restoring) return;
+        FollowSynapse();
+        lock (_baseGate) { if (_baseChroma != null) return; Started(); }
+        var c = ReadChroma();
+        lock (_baseGate) _baseChroma ??= c;
+    }
+
+    public override string? RestoreOriginal()
+    {
+        FollowSynapse();
+        SnapTapState? snap;
+        List<KeyActuation> act;
+        List<KeyRapidTrigger> rapid;
+        int? polling, brightness;
+        (byte Effect, byte Flags, byte Rate, List<System.Windows.Media.Color> Colors)? chroma;
+        lock (_baseGate)
+        {
+            if (!HasChanges) return null;
+            snap = _baseSnap;
+            act = _baseAct.Values.ToList();
+            rapid = _baseRapid.Values.ToList();
+            polling = _basePolling;
+            brightness = _baseBrightness;
+            chroma = _baseChroma;
+        }
+        var done = new List<string>();
+        _restoring = true;
+        try
+        {
+            if (act.Count > 0 && WriteActuation(act)) done.Add(Lang.T("atuação", "actuation"));
+            if (rapid.Count > 0 && WriteRapid(rapid)) done.Add("rapid trigger");
+            if (snap != null && WriteSnapTap(snap.Enabled, snap.Used)) done.Add("Snap Tap");
+            if (polling is int hz && WritePolling(hz)) done.Add(Lang.T("taxa", "polling"));
+            if (brightness is int b && WriteBrightness(b)) done.Add(Lang.T("brilho", "brightness"));
+            if (chroma is { } c && WriteChroma(c.Effect, c.Flags, c.Rate, c.Colors)) done.Add(Lang.T("luz", "lighting"));
+        }
+        finally { _restoring = false; }
+        lock (_baseGate) ClearBaseline();
+        Log.Write("razer: given back " + string.Join(", ", done));
+        return done.Count > 0 ? $"{Name}: " + string.Join(", ", done) : null;
+    }
 
     private static IReadOnlyList<byte> AllKeys => RazerProtocol.Keys.Select(k => k.Id).ToList();
 
@@ -294,6 +448,7 @@ internal sealed class RazerKeyboard : Gear
 
     public override void Poll()
     {
+        FollowSynapse();
         var st = ReadSnapTap();
         if (st != null) SnapOn = st.Enabled;
         string s = st == null ? "" : "Snap Tap " + (st.Enabled ? Lang.T("ligado", "on") : Lang.T("desligado", "off"));

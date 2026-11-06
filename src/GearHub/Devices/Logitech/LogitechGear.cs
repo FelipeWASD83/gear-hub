@@ -184,6 +184,7 @@ internal sealed class LogitechGear : Gear, GearHub.Lighting.ILightTarget
     /// </summary>
     public bool WriteDpi(int dpi)
     {
+        if (!_restoring && _baseDpi == null) _baseDpi = ReadDpi();
         _d.Call(HidppDevice.AdjustableDpi, 3, 0, (byte)(dpi >> 8), (byte)dpi);
         Signals.RaiseDpi(this, dpi);
         return true;
@@ -198,13 +199,18 @@ internal sealed class LogitechGear : Gear, GearHub.Lighting.ILightTarget
         return (opts, cur);
     }
 
-    public void WriteRate(int ms) => _d.Call(HidppDevice.ReportRate, 2, (byte)ms);
+    public void WriteRate(int ms)
+    {
+        if (!_restoring && _baseRate == null) _baseRate = ReadRate().Current;
+        _d.Call(HidppDevice.ReportRate, 2, (byte)ms);
+    }
 
     /// <summary>True = onboard memory, false = host (software) mode.</summary>
     public bool ReadOnboard() => _d.Call(HidppDevice.OnboardProfiles, 2)[0] == 1;
 
     public void WriteOnboard(bool onboard)
     {
+        if (!_restoring && _baseOnboard == null) _baseOnboard = ReadOnboard();
         if (VendorApps.GHub)
         {
             bool? ok = GHubClient.With(c => GHubId(c) is { } id && c.SetOnboard(id, onboard));
@@ -217,10 +223,42 @@ internal sealed class LogitechGear : Gear, GearHub.Lighting.ILightTarget
     private string? GHubId(GHubClient c) =>
         new[] { _product }.Concat(_d.ModelIds).Select(pid => c.DeviceId(pid, out _)).FirstOrDefault(id => id != null);
 
+
+    // ---- what the device had before the hub's first change (given back when the hub quits) ----
+    private bool _restoring;
+    private int? _baseDpi, _baseRate, _baseSidetone;
+    private bool? _baseOnboard;
+
+    public override bool HasChanges => _baseDpi != null || _baseRate != null || _baseSidetone != null || _baseOnboard != null;
+
+    public override string? RestoreOriginal()
+    {
+        if (!HasChanges) return null;
+        var done = new List<string>();
+        _restoring = true;
+        try
+        {
+            void Try(string what, Action a)
+            {
+                try { a(); done.Add(what); }
+                catch (HidppException e) { Log.Write($"{Name} restore {what}: {e.Message}"); }
+            }
+            if (_baseOnboard is bool ob) Try(Lang.T("memória", "onboard"), () => WriteOnboard(ob));
+            if (_baseDpi is int dpi) Try("DPI", () => WriteDpi(dpi));
+            if (_baseRate is int ms) Try(Lang.T("taxa", "rate"), () => WriteRate(ms));
+            if (_baseSidetone is int st) Try("sidetone", () => WriteSidetone(st));
+        }
+        finally { _restoring = false; }
+        _baseDpi = _baseRate = _baseSidetone = null;
+        _baseOnboard = null;
+        return done.Count > 0 ? $"{Name}: " + string.Join(", ", done) : null;
+    }
+
     public int ReadSidetone() => _d.Call(HidppDevice.Sidetone, 0)[0];
 
     public void WriteSidetone(int level)
     {
+        if (!_restoring && _baseSidetone == null) _baseSidetone = ReadSidetone();
         if (VendorApps.GHub && GHubClient.With(c => GHubId(c) is { } id && c.SetSidetone(id, level)) == true) return;
         _d.Call(HidppDevice.Sidetone, 1, (byte)Math.Clamp(level, 0, 100));
     }

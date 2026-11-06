@@ -137,6 +137,22 @@ internal static class SelfTest
                     Line($"devolveu: {razer.WriteRapid(new[] { before })}, agora {(razer.ReadRapid(new byte[] { 18 }).Single() == before ? "igual ao antes" : "DIFERENTE")}");
                     break;
                 }
+                case "restore" when razer != null:
+                {
+                    var syn = new SynapseLog(746);
+                    syn.Poll();
+                    Line($"perfil do Synapse agora: {syn.ActiveName ?? "(não achei no log)"}");
+                    var before = razer.ReadActuation(new byte[] { 18 }).Single();
+                    int pollBefore = razer.ReadPolling();
+                    razer.WriteActuation(new[] { new KeyActuation(18, RazerProtocol.FromMm(before.ReleaseMm + 0.5), RazerProtocol.FromMm(before.PressMm + 0.5)) });
+                    razer.WritePolling(pollBefore == 1000 ? 8000 : 1000);
+                    Line($"mudou: W {razer.ReadActuation(new byte[] { 18 }).Single().PressMm} mm, polling {razer.ReadPolling()} Hz; mudanças guardadas: {razer.HasChanges}");
+                    var done = hub.RestoreAll();
+                    var after = razer.ReadActuation(new byte[] { 18 }).Single();
+                    Line($"devolveu: {string.Join(" | ", done)}");
+                    Line($"agora: W {after.PressMm} mm (antes {before.PressMm}), polling {razer.ReadPolling()} Hz (antes {pollBefore}) -> {(after == before && razer.ReadPolling() == pollBefore ? "IGUAL AO ANTES" : "DIFERENTE")}");
+                    break;
+                }
                 case "depth" when razer != null:
                 {
                     // announced: keys released for 3 s, then hold W all the way down, then halfway, then let go

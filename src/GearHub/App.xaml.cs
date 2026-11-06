@@ -82,15 +82,27 @@ public partial class App : Application
             if (first != "--tray") ShowWindow();
             ScheduleUpdates();
         };
+        app.SessionEnding += (_, _) => GiveBack("logoff");
         int code = app.Run();
         EventChannel.Stop();
         Hotkeys.Stop();
-        Lighting.LightEngine.Instance.Stop();
+        GiveBack("quit");
         _tray?.Dispose();
         _foreground?.Dispose();
         DeviceHub.Instance.Dispose();
         SingleInstance.Release();
         return code;
+    }
+
+    private static int _gaveBack;
+
+    /// <summary>Lights let go and every device back to what the vendor apps had set (once, when the app leaves).</summary>
+    private static void GiveBack(string why)
+    {
+        if (Interlocked.Exchange(ref _gaveBack, 1) == 1) return;
+        Lighting.LightEngine.Instance.Stop();
+        if (!AppSettings.Current.RestoreOnExit) { Log.Write($"{why}: restore on exit is off"); return; }
+        DeviceHub.Instance.RestoreAll();
     }
 
     private int Screenshot(string path, string page, double scroll)

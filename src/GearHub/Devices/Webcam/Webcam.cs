@@ -116,8 +116,31 @@ internal sealed class Webcam : Gear
         return props;
     });
 
-    public bool Write(bool camera, int id, int value, bool auto) => With((cam, amp) =>
-        camera ? cam?.Set(id, value, auto ? 1 : 2) == 0 : amp?.Set(id, value, auto ? 1 : 2) == 0);
+    // what each control had before the hub's first change (given back when the hub quits)
+    private readonly Dictionary<string, (bool Camera, int Id, int Value, bool Auto)> _base = new();
+    private bool _restoring;
+
+    public bool Write(bool camera, int id, int value, bool auto)
+    {
+        string key = (camera ? "c" : "v") + id;
+        if (!_restoring && !_base.ContainsKey(key))
+            foreach (var p in Read())
+                if (p.Camera == camera && p.Id == id) _base[key] = (camera, id, p.Value, p.Auto);
+        return With((cam, amp) => camera ? cam?.Set(id, value, auto ? 1 : 2) == 0 : amp?.Set(id, value, auto ? 1 : 2) == 0);
+    }
+
+    public override bool HasChanges => _base.Count > 0;
+
+    public override string? RestoreOriginal()
+    {
+        if (_base.Count == 0) return null;
+        _restoring = true;
+        int n = 0;
+        try { foreach (var b in _base.Values) if (Write(b.Camera, b.Id, b.Value, b.Auto)) n++; }
+        finally { _restoring = false; }
+        _base.Clear();
+        return $"{_name}: " + Lang.T($"{n} ajuste(s)", $"{n} setting(s)");
+    }
 
     public override JsonObject? Capture()
     {

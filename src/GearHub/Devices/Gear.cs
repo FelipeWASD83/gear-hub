@@ -43,5 +43,14 @@ internal abstract class Gear : IDisposable
 
     public abstract void BuildPage(Page page);
 
+    /// <summary>True when the hub changed something on this device that the vendor app had set.</summary>
+    public virtual bool HasChanges => false;
+
+    /// <summary>
+    /// Writes back what the device had before the hub's first change this session (blocks; device I/O). Returns a
+    /// short line of what was done, or null when there was nothing to give back.
+    /// </summary>
+    public virtual string? RestoreOriginal() => null;
+
     public virtual void Dispose() { }
 }

@@ -130,6 +130,18 @@ inglês; este arquivo, o CHANGELOG e os commits em português; README em inglês
   `systray_systrayv*.log` ou a linha `teclado: perfil` do `ilha.log`). Em 06/11/2026 um teste religou o Snap Tap
   com ele no Rocket League em SnapTapLess (corrigido em ~4 min).
 
+## 1.2.0: devolver ao sair (pedido dele em 06/11/2026: "ao fechar o app as configs voltem para a dos apps originais")
+
+- Cada aparelho guarda o valor **antes da primeira escrita** do Gear Hub na sessão (`Remember*` nos `Write*` da Razer,
+  `_base*` na Logitech, por controle na webcam, `_changed` no DSX) e `Gear.RestoreOriginal` escreve de volta.
+  `DeviceHub.RestoreAll` roda ao sair (`App.GiveBack`: depois do `Run` e no `SessionEnding`), e pelo botão de Ajustes.
+  `restoreOnExit` em `settings.json` (ligado). As luzes param antes (`LightEngine.Stop`: a RAM volta ao efeito dela, a
+  Logitech ao ciclo).
+- **Synapse:** o `SynapseLog` (o leitor do log da bandeja que a ilha usa) dá o perfil ativo; se ele mudou depois da
+  primeira escrita, o Synapse já regravou o slot vivo e o que foi guardado é descartado (o Gear Hub não atropela a troca).
+- Testado em 06/11/2026 (`--write-test restore`): W de 1,2 para 1,7 mm e polling 8 kHz → 1 kHz, devolvidos iguais
+  ao SnapTapLess dele. Processo morto (Gerenciador de Tarefas, queda) não devolve nada.
+
 ## Decisões que não se desfazem sem motivo
 
 - Nada de kernel, driver novo, modo de teste ou ring 0 (regra dele). A RAM só funciona pelo serviço da Corsair por isso.

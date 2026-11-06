@@ -74,6 +74,25 @@ internal sealed class DeviceHub : IDisposable
         finally { _scanning = false; }
     }
 
+    /// <summary>
+    /// Gives every device back what it had before the hub's first change (the vendor apps' settings), and lets go of
+    /// the lights (the RAM goes back to its own effect). Blocks; returns what was given back, one line per device.
+    /// </summary>
+    public List<string> RestoreAll()
+    {
+        var done = new List<string>();
+        foreach (var g in Gears)
+        {
+            try
+            {
+                if (g.RestoreOriginal() is string s) done.Add(s);
+            }
+            catch (Exception e) { Log.Write($"restore {g.Name}: {e.Message}"); }
+        }
+        Log.Write("restore: " + (done.Count == 0 ? "nothing to give back" : string.Join(" | ", done)));
+        return done;
+    }
+
     public void PollAll()
     {
         foreach (var g in Gears)

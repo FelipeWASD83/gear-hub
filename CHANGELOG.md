@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0 (06/11/2026)
+
+**Novo**
+
+- Ao sair, o Gear Hub devolve cada aparelho ao que os apps das marcas tinham deixado: atuação, rapid trigger, Snap Tap, taxa, brilho e luz do teclado; DPI, taxa, memória e sidetone da Logitech; os ajustes da webcam; o perfil do DSX. As luzes animadas param e a memória volta ao efeito dela. Vale ao sair pela bandeja, pelo --quit e quando o Windows desliga.
+- Se o Synapse trocar de perfil enquanto o Gear Hub está aberto, ele mesmo já regravou o teclado, e o Gear Hub não mexe mais.
+- Em Ajustes: a chave "Devolver ao sair", a lista do que o Gear Hub mudou e o botão "Devolver agora".
+
 ## 1.1.0 (06/11/2026)
 
 **Novo**

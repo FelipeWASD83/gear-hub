@@ -126,6 +126,29 @@ internal static class SettingsPage
                 p.Say(Lang.T("Idioma trocado", "Language changed"));
             }));
 
+        var back = p.Section(Lang.T("Voltar ao que os apps das marcas deixaram", "Back to what the vendor apps set"),
+            Lang.T("O Gear Hub guarda como cada aparelho estava antes da primeira mudança e devolve ao sair. Se o Synapse trocar de perfil no meio, ele mesmo já regravou o teclado, e aí o Gear Hub não mexe. As luzes animadas param e a memória volta ao efeito dela.",
+                "Gear Hub keeps how each device was before its first change and gives it back on quit. If Synapse switches profile meanwhile, it already rewrote the keyboard, and Gear Hub leaves it. Animated lights stop and the memory goes back to its own effect."));
+        p.Row(back, Lang.T("Devolver ao sair", "Give back on quit"), Lang.T("Vale ao sair pela bandeja, pelo --quit e quando o Windows desliga.", "On quit from the tray, on --quit and when Windows shuts down."),
+            p.Toggle(AppSettings.Current.RestoreOnExit, v => { AppSettings.Current.RestoreOnExit = v; AppSettings.Save(); }));
+        var pending = new TextBlock { Style = Page.S("Small"), Margin = new Thickness(0, 2, 0, 6) };
+        void ShowPending()
+        {
+            var changed = DeviceHub.Instance.Gears.Where(g => g.HasChanges).Select(g => g.Name).ToList();
+            pending.Text = changed.Count == 0 ? Lang.T("Nada mudado pelo Gear Hub desde que abriu.", "Nothing changed by Gear Hub since it opened.")
+                : Lang.T("Mudado pelo Gear Hub: ", "Changed by Gear Hub: ") + string.Join(", ", changed);
+        }
+        ShowPending();
+        back.Children.Add(pending);
+        back.Children.Add(p.Line(p.Button(Lang.T("Devolver agora", "Give back now"), () =>
+        {
+            p.Work(() => DeviceHub.Instance.RestoreAll(), done =>
+            {
+                p.Say(done.Count == 0 ? Lang.T("Nada para devolver", "Nothing to give back") : Lang.T("Devolvido: ", "Given back: ") + string.Join(" · ", done));
+                ShowPending();
+            });
+        })));
+
         var keys = p.Section(Lang.T("Atalhos de teclado", "Keyboard shortcuts"), Lang.T("Valem em qualquer lugar, até dentro do jogo (pela API normal do Windows, nada mexe no jogo). Clique na caixa e aperte a combinação; Delete apaga.",
             "They work anywhere, even in a game (the plain Windows API, nothing touches the game). Click the box and press the combination; Delete clears it."));
         void HotkeyRow(string label, Func<string> get, Action<string> set)

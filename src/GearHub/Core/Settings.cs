@@ -12,6 +12,8 @@ internal sealed class AppSettings
     [JsonPropertyName("language")] public string Language { get; set; } = "auto";
     [JsonPropertyName("autoProfiles")] public bool AutoProfiles { get; set; } = true;
     [JsonPropertyName("checkUpdates")] public bool CheckUpdates { get; set; } = true;
+    /// <summary>On quit, give the devices back what the vendor apps had set (his request on 06/11/2026).</summary>
+    [JsonPropertyName("restoreOnExit")] public bool RestoreOnExit { get; set; } = true;
     [JsonPropertyName("lastPage")] public string LastPage { get; set; } = "";
     /// <summary>1.0.0 kept the RAM choice here ("mode:#hex"); read once into Lights.</summary>
     [JsonPropertyName("ramColor")] public string RamColor { get; set; } = "";
