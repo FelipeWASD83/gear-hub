@@ -148,17 +148,40 @@ inglês; este arquivo, o CHANGELOG e os commits em português; README em inglês
   resto em 2,5, rapid trigger ligado e Snap Tap desligado, e o slot vivo (1) estava com **1,2 mm em todas as teclas e
   rapid trigger desligado**. Os comandos de atuação, rapid trigger e Snap Tap aceitam qualquer slot: lidos 0 a 5,
   o **slot 4 tinha o SnapTapLess certinho** (letras 2,0, outras 2,5, RT 0,4, snap desligado), o 3 parece o Good One
-  (RT 0,5, snap ligado), o 2 tem tudo 2,0 e o 5 tudo 4,0. O slot 0 também está em 1,2 em tudo (parece o padrão de
-  fábrica). Copiado o 4 para o 1 e conferido tecla a tecla.
-- **Causa não achada.** Nem o Gear Hub nem os testes gravam todas as teclas (o `restore` das 17:38 só mexeu no W, que
-  já estava em 1,2 antes). Hipótese, não confirmada: o teclado voltou o slot vivo ao padrão (o mesmo 1,2 do slot 0)
-  numa reconexão e o Synapse não regravou porque o perfil não mudou. Desde a 1.3.0 o log anota toda escrita de
-  atuação e rapid trigger (`razer: writing ...`, `[giving back]` quando é a devolução); se acontecer de novo, o log diz
-  se foi o Gear Hub.
+  (RT 0,5, snap ligado), o 2 tem tudo 2,0 e o 5 tudo 4,0. **O slot 0 não é cópia de fábrica: lê igual ao vivo**
+  (conferido às 18:29, com o vivo em 2,0/2,5; antes ele "estava em 1,2" porque o vivo estava). Copiado o 4 para o 1
+  e conferido tecla a tecla.
+- A causa ficou para a 1.4.0 (abaixo). Desde a 1.3.0 o log anota toda escrita de atuação e rapid trigger
+  (`razer: writing ...`, `[giving back]` quando é a devolução).
 - Página do teclado, seção "Perfis guardados no teclado" (`BuildStored`): lê os slots 1 a 5 (`ReadSlot`: valor mais
   comum das letras e das outras teclas, RT e snap) e "Usar este" copia o slot para o vivo (`UseSlot`, o que o
   `--write-test use-slot` testa com o slot 4). **Qual slot é qual perfil do Synapse não se sabe ao certo** (o
   `05 81` lista 6 perfis sem nome), por isso a tela diz "Guardado N" e mostra os valores.
+
+## 1.4.0: o teclado preso em 1,2 mm (06/11/2026)
+
+- **O que um vigia só de leitura (slot vivo a cada 3 s) viu quando ele trocou de perfil:** 18:23:59 tudo em 1,2 mm
+  com RT desligado; 18:24:02 Good One; 18:24:12 atuação 1,2 com RT já em 0,4; 18:24:16 SnapTapLess certo. A ilha
+  anotou as trocas às 18:24:02.8 e 18:24:12.8. Ou seja: **toda troca põe as teclas em 1,2 mm / RT desligado e só
+  depois grava o perfil, e o Synapse ainda grava uns 4 s depois da linha no log dele.** O teclado não se reconectou
+  (chegada do USB às 14:55) e fechar o Gear Hub não muda nada (reproduzido às 18:21). Hoje ele ficou preso em 1,2
+  duas vezes com o Synapse achando que o SnapTapLess estava aplicado.
+- **Causa provável (inferência, não prova):** o Synapse, a ilha e o Gear Hub falam pela mesma interface e uma pergunta
+  de outro programa no meio da gravação embaralha a resposta que o Synapse espera; a ilha lia o Snap Tap 1,5 s depois
+  da linha do log, bem no meio. Respostas perdidas na disputa foram vistas várias vezes neste dia (`02 19/1A no
+  answer` com a gravação tendo entrado).
+- **Silêncio:** `PollSynapse` (um leitor só do log, com trava) vê a troca, e `Command` espera até 15 s depois dela
+  (`WaitQuiet`); o `Poll` de 20 s pula. Um timer de 1 s lê o log (só o tamanho do arquivo quando nada mudou).
+- **Guarda** (`Guard`, só no app de verdade: `GuardAllowed`, ligado no `App.Main`; `razerGuard` em `settings.json`):
+  16 s depois da troca, 30 s depois de abrir e, de 5 em 5 min, uma leitura barata de 15 teclas. Se **todas as teclas
+  estão em 1,2 mm** e o Synapse diz outro perfil que não "Factory Default", copia a cópia guardada aprendida desse
+  perfil (`razerSlots`: guid → slot e nome) e confere lendo de volta (duas tentativas; julga pela leitura, porque a
+  resposta da gravação pode se perder). Se não, aprende: o vivo igual a exatamente um dos slots 2 a 5 (atuação, RT e
+  Snap Tap) vira o slot daquele perfil. `UseSlot` grava com `_repairing` (não entra no que se devolve ao sair; na
+  1.3.0 o "Usar este" seria desfeito ao fechar).
+- Testado em 06/11/2026 com `--write-test guard`: aprendeu SnapTapLess = slot 4, todas as teclas em 1,2 de propósito, a
+  guarda copiou o slot 4 e a comparação tecla a tecla deu igual. **Não testado:** uma troca de perfil real com o
+  silêncio (precisa dele trocando no Synapse).
 
 ## Decisões que não se desfazem sem motivo
 

@@ -165,6 +165,22 @@ internal static class SelfTest
                     Line($"UseSlot={ok}; depois: {razer.ReadSlot(1)}; atuação igual tecla a tecla: {src.SequenceEqual(live)}");
                     break;
                 }
+                case "guard" when razer != null:
+                {
+                    // learn which stored slot the active profile is, put the live slot on the factory values (slot 0)
+                    // and check the guard copies the profile back
+                    RazerKeyboard.GuardAllowed = true;
+                    razer.GuardNow("write test: learn");
+                    Line($"aprendido: {string.Join(", ", AppSettings.Current.RazerSlots.Select(kv => $"{kv.Value.Name} = slot {kv.Value.Slot}"))}");
+                    Line($"antes: {razer.ReadSlot(1)}");
+                    // what a switch that did not finish leaves: every key at 1.2 mm (press 1.2, release 1.1)
+                    ushort Raw(double mm) => (ushort)Math.Round(mm * 65535 / 4);
+                    var stuck = RazerKeyboard.AllKeys.Select(key => new KeyActuation(key, Raw(1.1), Raw(1.2))).ToList();
+                    Line($"tudo em 1,2 mm: {razer.WriteActuation(stuck)} -> {razer.ReadSlot(1)}");
+                    razer.GuardNow("write test: repair");
+                    Line($"depois da guarda: {razer.ReadSlot(1)}");
+                    break;
+                }
                 case "depth" when razer != null:
                 {
                     // announced: keys released for 3 s, then hold W all the way down, then halfway, then let go

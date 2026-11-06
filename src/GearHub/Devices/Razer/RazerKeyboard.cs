@@ -53,6 +53,7 @@ internal sealed class RazerKeyboard : Gear
     public byte[]? Command(RazerProtocol.Cmd cmd, ReadOnlySpan<byte> args, int? size = null)
     {
         byte[] a = args.ToArray();
+        WaitQuiet();
         lock (_gate)
         {
             using SafeFileHandle? h = HidApi.Open(_path, false);
@@ -277,7 +278,7 @@ internal sealed class RazerKeyboard : Gear
     /// </summary>
     private void FollowSynapse()
     {
-        string? now = _synapse.Poll();
+        string? now = PollSynapse();
         lock (_baseGate)
         {
             if (_baseProfile != null && now != null && now != _baseProfile && HasChanges)
@@ -300,12 +301,12 @@ internal sealed class RazerKeyboard : Gear
 
     private void Started()
     {
-        if (!HasChanges) _baseProfile = _synapse.Poll();
+        if (!HasChanges) _baseProfile = PollSynapse();
     }
 
     private void RememberSnap()
     {
-        if (_restoring) return;
+        if (_restoring || _repairing) return;
         FollowSynapse();
         lock (_baseGate) { if (_baseSnap != null) return; Started(); }
         var s = ReadSnapTap();
@@ -314,7 +315,7 @@ internal sealed class RazerKeyboard : Gear
 
     private void RememberActuation(IEnumerable<byte> keys)
     {
-        if (_restoring) return;
+        if (_restoring || _repairing) return;
         FollowSynapse();
         List<byte> missing;
         lock (_baseGate) { Started(); missing = keys.Where(k => !_baseAct.ContainsKey(k)).Distinct().ToList(); }
@@ -325,7 +326,7 @@ internal sealed class RazerKeyboard : Gear
 
     private void RememberRapid(IEnumerable<byte> keys)
     {
-        if (_restoring) return;
+        if (_restoring || _repairing) return;
         FollowSynapse();
         List<byte> missing;
         lock (_baseGate) { Started(); missing = keys.Where(k => !_baseRapid.ContainsKey(k)).Distinct().ToList(); }
@@ -336,7 +337,7 @@ internal sealed class RazerKeyboard : Gear
 
     private void RememberPolling()
     {
-        if (_restoring) return;
+        if (_restoring || _repairing) return;
         FollowSynapse();
         lock (_baseGate) { if (_basePolling != null) return; Started(); }
         int hz = ReadPolling();
@@ -345,7 +346,7 @@ internal sealed class RazerKeyboard : Gear
 
     private void RememberBrightness()
     {
-        if (_restoring) return;
+        if (_restoring || _repairing) return;
         FollowSynapse();
         lock (_baseGate) { if (_baseBrightness != null) return; Started(); }
         int b = ReadBrightness();
@@ -354,7 +355,7 @@ internal sealed class RazerKeyboard : Gear
 
     private void RememberChroma()
     {
-        if (_restoring) return;
+        if (_restoring || _repairing) return;
         FollowSynapse();
         lock (_baseGate) { if (_baseChroma != null) return; Started(); }
         var c = ReadChroma();
@@ -394,6 +395,186 @@ internal sealed class RazerKeyboard : Gear
         lock (_baseGate) ClearBaseline();
         Log.Write("razer: given back " + string.Join(", ", done));
         return done.Count > 0 ? $"{Name}: " + string.Join(", ", done) : null;
+    }
+
+
+    // ---- Synapse profile switches (06/11/2026) ----
+    // A switch first puts every key at 1.2 mm with rapid trigger off (the default) and writes the profile a few
+    // seconds later, about 4 s after the line in its tray log. A read from another program in that window (the hub,
+    // the ilha) mixes up Synapse's replies, and the keyboard can stay at 1.2 mm while Synapse believes the profile is
+    // in. So: quiet for 15 s after a switch shows in the log, then check. Slot 0 is NOT a factory copy: it reads the
+    // same as the live slot (checked on 06/11/2026), so the stuck state is told by every key at 1.2 mm.
+
+    private static readonly TimeSpan QuietTime = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan CheapCheckEvery = TimeSpan.FromMinutes(5);
+
+    /// <summary>Only the real app repairs the keyboard (not --self-test, --screenshot or a write test).</summary>
+    public static bool GuardAllowed { get; set; }
+
+    private readonly object _synapseGate = new();
+    private long _quietUntil;
+    private bool _repairing;
+    private System.Threading.Timer? _watch;
+    private int _watchBusy, _guardBusy;
+    private DateTime _nextCheck = DateTime.MaxValue;
+    private readonly HashSet<string> _unknownSaid = new();
+
+    public bool Quiet => DateTime.UtcNow.Ticks < Interlocked.Read(ref _quietUntil);
+
+    private void WaitQuiet()
+    {
+        long left = Interlocked.Read(ref _quietUntil) - DateTime.UtcNow.Ticks;
+        if (left > 0) Thread.Sleep(TimeSpan.FromTicks(Math.Min(left, QuietTime.Ticks)));
+    }
+
+    /// <summary>Reads the tray log (one reader for every caller) and starts the quiet window on a switch.</summary>
+    private string? PollSynapse()
+    {
+        lock (_synapseGate)
+        {
+            string? was = _synapse.Active;
+            string? now = _synapse.Poll();
+            if (was != null && now != null && now != was)
+            {
+                Interlocked.Exchange(ref _quietUntil, (DateTime.UtcNow + QuietTime).Ticks);
+                string name = _synapse.ActiveName ?? now;
+                Log.Write($"razer: Synapse switched to {name}; quiet for {QuietTime.TotalSeconds:0} s while it writes");
+                _ = System.Threading.Tasks.Task.Delay(QuietTime + TimeSpan.FromSeconds(1)).ContinueWith(_ => Guard($"switch to {name}", full: true));
+            }
+            return now;
+        }
+    }
+
+    private void EnsureWatch()
+    {
+        if (_watch != null) return;
+        lock (_synapseGate)
+        {
+            if (_watch != null) return;
+            _nextCheck = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            _watch = new System.Threading.Timer(_ => Watch(), null, 1000, 1000);
+        }
+    }
+
+    private void Watch()
+    {
+        if (Interlocked.Exchange(ref _watchBusy, 1) == 1) return;
+        try
+        {
+            PollSynapse();
+            if (DateTime.UtcNow < _nextCheck) return;
+            bool first = _nextCheck != DateTime.MaxValue && !_firstCheckDone;
+            _nextCheck = DateTime.UtcNow + CheapCheckEvery;
+            _firstCheckDone = true;
+            Guard(first ? "start" : "check", full: first);
+        }
+        catch (Exception e) { Log.Write("razer watch: " + e.Message); }
+        finally { Interlocked.Exchange(ref _watchBusy, 0); }
+    }
+
+    private bool _firstCheckDone;
+
+    private const double DefaultMm = 1.2;
+
+    private static bool AllAtDefault(IEnumerable<KeyActuation> act) => act.All(a => Math.Abs(a.PressMm - DefaultMm) < 0.05);
+
+    private sealed record Full(List<KeyActuation> Act, List<KeyRapidTrigger> Rapid, SnapTapState? Snap)
+    {
+        public bool SameKeys(Full o) => Act.SequenceEqual(o.Act) && Rapid.SequenceEqual(o.Rapid);
+        public bool Same(Full o) => SameKeys(o) && Snap?.Enabled == o.Snap?.Enabled && (Snap?.Used ?? new List<SnapPair>()).SequenceEqual(o.Snap?.Used ?? new List<SnapPair>());
+    }
+
+    private Full? ReadFull(byte slot)
+    {
+        var act = ReadActuation(AllKeys, slot);
+        var rt = ReadRapid(AllKeys, slot);
+        if (act.Count != AllKeys.Count || rt.Count != AllKeys.Count) return null;
+        return new Full(act, rt, ReadSnapTap(slot));
+    }
+
+    /// <summary>
+    /// Every key at 1.2 mm while the stored slot of the profile Synapse names is something else = a switch that did
+    /// not finish: copy that stored slot in. Otherwise learn which stored slot the active profile is (`full`).
+    /// The cheap check reads one block of live keys and goes on only when they are all at 1.2 mm.
+    /// </summary>
+    private void Guard(string why, bool full)
+    {
+        if (!GuardAllowed || !AppSettings.Current.RazerGuard || !VendorApps.Synapse) return;
+        if (Interlocked.Exchange(ref _guardBusy, 1) == 1) return;
+        try
+        {
+            WaitQuiet();
+            string? guid;
+            string name;
+            lock (_synapseGate) { guid = _synapse.Active; name = _synapse.ActiveName ?? guid ?? "?"; }
+            if (guid == null) return;
+            if (!full)
+            {
+                var block = AllKeys.Take(RazerProtocol.ActuationPerCall).ToList();
+                var liveBlock = ReadActuation(block);
+                if (liveBlock.Count == 0 || !AllAtDefault(liveBlock)) return;
+            }
+            var live = ReadFull(RazerProtocol.LiveSlot);
+            if (live == null) return;
+            RazerSlotNote? note;
+            lock (AppSettings.Gate) AppSettings.Current.RazerSlots.TryGetValue(guid, out note);
+            if (AllAtDefault(live.Act))
+            {
+                if (name.Equals("Factory Default", StringComparison.OrdinalIgnoreCase)) return;
+                if (note == null || note.Slot is < 2 or > 5)
+                {
+                    lock (_unknownSaid)
+                        if (_unknownSaid.Add(guid))
+                            Log.Write($"razer: every key is at 1.2 mm while Synapse says {name}, and no stored copy of {name} is known yet ({why})");
+                    return;
+                }
+                var stored = ReadFull((byte)note.Slot);
+                if (stored == null || stored.Act.SequenceEqual(live.Act)) return;
+                Log.Write($"razer: every key stayed at 1.2 mm while Synapse says {name} ({why}); copying stored slot {note.Slot}");
+                bool fixedIt = false;
+                for (int round = 0; round < 2 && !fixedIt; round++)
+                {
+                    if (round > 0) Thread.Sleep(2000);
+                    // a write can land while its reply is lost to another program on the interface: judge by reading
+                    UseSlot((byte)note.Slot);
+                    var after = ReadFull(RazerProtocol.LiveSlot);
+                    fixedIt = after != null && after.SameKeys(stored);
+                }
+                Log.Write($"razer: {(fixedIt ? "fixed" : "could not fix")} ({name}, slot {note.Slot})");
+                if (fixedIt) Repaired?.Invoke(name);
+                return;
+            }
+            if (!full) return;
+            var matches = new List<int>();
+            for (byte slot = 2; slot <= 5; slot++)
+                if (ReadFull(slot) is { } f && f.Same(live)) matches.Add(slot);
+            if (matches.Count != 1) return;
+            if (note != null && note.Slot == matches[0] && note.Name == name) return;
+            lock (AppSettings.Gate) AppSettings.Current.RazerSlots[guid] = new RazerSlotNote { Slot = matches[0], Name = name };
+            AppSettings.Save();
+            Log.Write($"razer: learned that {name} is stored in slot {matches[0]} ({why})");
+        }
+        catch (Exception e) { Log.Write("razer guard: " + e.Message); }
+        finally { Interlocked.Exchange(ref _guardBusy, 0); }
+    }
+
+    /// <summary>The guard's full check, now (the write test).</summary>
+    public void GuardNow(string why) => Guard(why, full: true);
+
+    /// <summary>Raised (off the interface thread) after the guard put a profile back; the window shows it.</summary>
+    public static event Action<string>? Repaired;
+
+    public override void Dispose()
+    {
+        _watch?.Dispose();
+        _watch = null;
+    }
+
+    /// <summary>The Synapse profile names the guard learned, by stored slot.</summary>
+    private static Dictionary<int, string> LearnedNames()
+    {
+        lock (AppSettings.Gate)
+            return AppSettings.Current.RazerSlots.Values.Where(n => n.Name != "").GroupBy(n => n.Slot).ToDictionary(g => g.Key, g => g.Last().Name);
     }
 
     public static IReadOnlyList<byte> AllKeys => RazerProtocol.Keys.Select(k => k.Id).ToList();
@@ -450,7 +631,9 @@ internal sealed class RazerKeyboard : Gear
 
     public override void Poll()
     {
+        EnsureWatch();
         FollowSynapse();
+        if (Quiet) return;
         var st = ReadSnapTap();
         if (st != null) SnapOn = st.Enabled;
         string s = st == null ? "" : "Snap Tap " + (st.Enabled ? Lang.T("ligado", "on") : Lang.T("desligado", "off"));
@@ -779,7 +962,11 @@ internal sealed class RazerKeyboard : Gear
         var st = ReadSnapTap(slot);
         if (act.Count == 0 || st == null) return false;
         Log.Write($"razer: copying stored slot {slot} into the live slot");
-        return WriteActuation(act) & WriteRapid(rt) & WriteSnapTap(st.Enabled, st.Used);
+        // Synapse's own profile, not a change of ours: nothing to give back on quit (giving back would put the
+        // factory values back)
+        _repairing = true;
+        try { return WriteActuation(act) & WriteRapid(rt) & WriteSnapTap(st.Enabled, st.Used); }
+        finally { _repairing = false; }
     }
 
     private void BuildStored(Page p)
@@ -788,6 +975,11 @@ internal sealed class RazerKeyboard : Gear
             Lang.T("O Synapse guarda uma cópia de cada perfil no teclado. Se o que está valendo agora ficou diferente do que você configurou, \"Usar este\" copia um deles para o que vale (o mesmo que o Synapse faz ao trocar de perfil).",
                 "Synapse keeps a copy of each profile in the keyboard. If what counts right now is not what you set, \"Use this\" copies one of them into the live profile (what Synapse does on a profile switch)."));
         var loading = p.Note(sec, Lang.T("Lendo os perfis guardados...", "Reading the stored profiles..."));
+        p.Row(sec, Lang.T("Consertar sozinho", "Fix it by itself"),
+            Lang.T("Às vezes, depois de trocar de perfil no Synapse, o teclado fica no padrão de fábrica (1,2 mm em tudo). Com isto ligado, o Gear Hub percebe e copia o perfil certo daqui.",
+                "Sometimes, after a profile switch in Synapse, the keyboard stays on the factory values (1.2 mm everywhere). With this on, Gear Hub notices and copies the right profile from here."),
+            p.Toggle(AppSettings.Current.RazerGuard, on => { AppSettings.Current.RazerGuard = on; AppSettings.Save(); }));
+        var learned = LearnedNames();
         p.Work(() => Enumerable.Range(1, 5).Select(i => ReadSlot((byte)i)).Where(s => s != null).Select(s => s!).ToList(), slots =>
         {
             sec.Children.Remove(loading);
@@ -797,6 +989,7 @@ internal sealed class RazerKeyboard : Gear
                 string desc = Lang.T($"letras {Page.Mm(s.Letters)}, outras {Page.Mm(s.Others)}, rapid trigger ", $"letters {Page.Mm(s.Letters)}, others {Page.Mm(s.Others)}, rapid trigger ")
                     + (s.RapidOn > 0 ? Page.Mm(s.RapidMm) : Lang.T("desligado", "off")) + ", Snap Tap " + (s.Snap ? Lang.T("ligado", "on") : Lang.T("desligado", "off"));
                 string name = s.Slot == RazerProtocol.LiveSlot ? Lang.T("Valendo agora", "Live now") : Lang.T($"Guardado {s.Slot}", $"Stored {s.Slot}");
+                if (s.Slot != RazerProtocol.LiveSlot && learned.TryGetValue(s.Slot, out var profile)) name += " · " + profile;
                 UIElement control = s.Slot == RazerProtocol.LiveSlot
                     ? new TextBlock { Text = Lang.T("é o que as teclas fazem", "what the keys do"), Style = Page.S("Small"), VerticalAlignment = VerticalAlignment.Center }
                     : p.Button(Lang.T("Usar este", "Use this"), () =>

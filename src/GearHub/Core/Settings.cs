@@ -23,8 +23,17 @@ internal sealed class AppSettings
     [JsonPropertyName("hotkeyProfile")] public string HotkeyProfile { get; set; } = "";
     [JsonPropertyName("hotkeySnapTap")] public string HotkeySnapTap { get; set; } = "";
     [JsonPropertyName("hotkeyWindow")] public string HotkeyWindow { get; set; } = "";
+    /// <summary>
+    /// Razer: after a Synapse profile switch that left the keyboard on the factory values, copy the profile's stored
+    /// slot into the live one (his keyboard got stuck at 1.2 mm on 06/11/2026).
+    /// </summary>
+    [JsonPropertyName("razerGuard")] public bool RazerGuard { get; set; } = true;
+    /// <summary>Which stored keyboard slot (2..5) holds each Synapse profile, learned by the guard; by profile guid.</summary>
+    [JsonPropertyName("razerSlots")] public System.Collections.Generic.Dictionary<string, RazerSlotNote> RazerSlots { get; set; } = new();
 
     public static AppSettings Current { get; private set; } = new();
+
+    public static readonly object Gate = new();
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
@@ -57,6 +66,7 @@ internal sealed class AppSettings
 
     public static void Save()
     {
+        lock (Gate)
         try
         {
             string tmp = Paths.Settings + ".tmp";
@@ -65,4 +75,10 @@ internal sealed class AppSettings
         }
         catch (Exception e) { Log.Error("settings save", e); }
     }
+}
+
+internal sealed class RazerSlotNote
+{
+    [JsonPropertyName("slot")] public int Slot { get; set; }
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
 }

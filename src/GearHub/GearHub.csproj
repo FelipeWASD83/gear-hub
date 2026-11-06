@@ -18,7 +18,7 @@
     <RootNamespace>GearHub</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\..\icone\icone.ico</ApplicationIcon>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <Product>Gear Hub</Product>
     <Company>Felipe</Company>
     <Description>Central de Periféricos</Description>

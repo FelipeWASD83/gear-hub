@@ -60,6 +60,9 @@ public partial class App : Application
 
         Log.Write($"start {Version} ({string.Join(' ', args)}) from {AppContext.BaseDirectory}");
         if (first == Updater.AfterArg) Updater.MarkOpened();
+        Devices.Razer.RazerKeyboard.GuardAllowed = true;
+        Devices.Razer.RazerKeyboard.Repaired += name => app.Dispatcher.BeginInvoke(() =>
+            Window?.Say(Lang.T($"Teclado de volta ao perfil {name}", $"Keyboard back on profile {name}"), true));
         DeviceHub.Instance.Start();
         Bridge.ShowWindow = page => app.Dispatcher.BeginInvoke(() =>
         {

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.0 (06/11/2026)
+
+**Novo**
+
+- O Gear Hub conserta sozinho o teclado que fica preso em 1,2 mm depois de uma troca de perfil no Synapse. Ele aprende em qual cópia guardada dentro do teclado está cada perfil e, quando todas as teclas ficam em 1,2 mm com o Synapse dizendo que o perfil é outro, copia o perfil certo de volta e avisa na janela. Dá para desligar em "Consertar sozinho", na seção "Perfis guardados no teclado".
+- Na lista dos perfis guardados aparece o nome do perfil do Synapse de cada cópia, depois que o Gear Hub aprende qual é qual.
+
+**Mudou**
+
+- Durante 15 segundos depois de cada troca de perfil no Synapse, o Gear Hub não fala com o teclado, para não atrapalhar o Synapse enquanto ele grava o perfil (era isso que deixava o teclado preso em 1,2 mm).
+
+**Corrigido**
+
+- "Usar este" não conta mais como mudança do Gear Hub: antes, ao fechar, ele devolvia o teclado para os 1,2 mm de antes.
+
 ## 1.3.0 (06/11/2026)
 
 **Novo**
