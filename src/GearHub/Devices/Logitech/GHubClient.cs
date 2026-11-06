@@ -11,10 +11,10 @@ namespace GearHub.Devices.Logitech;
 
 /// <summary>
 /// G HUB's local agent (ws://localhost:9010, subprotocol "json", Origin file://), used only while G HUB runs, for
-/// what it would otherwise undo: with the mouse in host mode G HUB re-applies its own DPI card on every profile event.
-/// Envelope seen on 06/11/2026: {"msgId","verb","path","payload"}; the agent first sends OPTIONS "/" (ready); answers
-/// carry the same msgId and result.code SUCCESS. Write formats come from G HUB's own UI code (app.asar), not tested
-/// against the agent before this app.
+/// sidetone and onboard mode, which G HUB would otherwise put back. Envelope seen on 06/11/2026: {"msgId","verb",
+/// "path","payload"}; the agent first sends OPTIONS "/" (ready); answers carry the same msgId and result.code
+/// SUCCESS. Tested on 06/11/2026: sidetone through here reached the headset; editing the MOUSE_SETTINGS card only
+/// changed G HUB's own table (not the mouse), and "/audio/<id>/onboard" refused the G733's EQ, so neither is used.
 /// </summary>
 internal sealed class GHubClient : IDisposable
 {
@@ -89,7 +89,8 @@ internal sealed class GHubClient : IDisposable
                 Log.Write($"ghub {verb} {path}: {code} {m["result"]?["what"]}");
                 return null;
             }
-            return m["payload"] as JsonObject ?? new JsonObject();
+            // a detached copy: callers put parts of it into new requests
+            return m["payload"]?.DeepClone() as JsonObject ?? new JsonObject();
         }
         Log.Write($"ghub {verb} {path}: no answer");
         return null;
@@ -115,47 +116,8 @@ internal sealed class GHubClient : IDisposable
         return null;
     }
 
-    /// <summary>
-    /// Sets the active DPI in G HUB's current profile: reads the MOUSE_SETTINGS card assigned to the device's slot,
-    /// swaps the active level for the new value and assigns it back (the payload G HUB's UI builds).
-    /// </summary>
-    public bool SetDpi(string model, int dpi)
-    {
-        string? profile = Call("GET", "/profile/active")?["id"]?.ToString();
-        if (profile == null) return false;
-        var profiles = Call("GET", "/profiles");
-        string slotPrefix = model.Replace('_', '-');
-        JsonObject? assignment = null;
-        foreach (var p in (profiles?["profiles"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
-        {
-            if (p["id"]?.ToString() != profile) continue;
-            assignment = (p["assignments"] as JsonArray ?? new JsonArray()).OfType<JsonObject>()
-                .FirstOrDefault(a => a["slotId"]?.ToString() is string s && s.StartsWith(slotPrefix, StringComparison.OrdinalIgnoreCase) && s.EndsWith("_mouse_settings", StringComparison.OrdinalIgnoreCase));
-        }
-        string? slot = assignment?["slotId"]?.ToString();
-        string? cardId = assignment?["cardId"]?.ToString();
-        if (slot == null || cardId == null) return false;
-        var card = Call("GET", "/card", new JsonObject { ["id"] = cardId });
-        if (card == null || card["readOnly"]?.GetValue<bool>() == true) return false;
-        card.Remove("@type");
-        if (card["mouseSettings"]?["dpiTable"] is not JsonObject table) return false;
-        int old = table["activeDpi"]?.GetValue<int>() ?? 0;
-        if (table["levels"] is JsonArray levels)
-        {
-            for (int i = 0; i < levels.Count; i++)
-                if (levels[i]?.GetValue<int>() == old) { levels[i] = dpi; break; }
-        }
-        table["activeDpi"] = dpi;
-        var r = Call("SET", "/assignment", new JsonObject
-        {
-            ["profile"] = profile,
-            ["slotId"] = slot,
-            ["card"] = card,
-            ["updateCard"] = true,
-            ["returnCard"] = true,
-        });
-        return r != null;
-    }
+    /// <summary>Who drives the device's light in G HUB: "LAMPARRAY" (Windows Dynamic Lighting), "FIRMWARE"..., or null.</summary>
+    public string? LightingControl(string deviceId) => Call("GET", $"/lighting/{deviceId}/mode")?["control"]?.ToString();
 
     public bool SetSidetone(string deviceId, int level) =>
         Call("SET", $"/audio/{deviceId}/sidetone", new JsonObject { ["muted"] = level == 0, ["gain"] = level / 100.0, ["channel"] = "SIDETONE" }) != null;

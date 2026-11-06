@@ -33,8 +33,9 @@ inglês; este arquivo, o CHANGELOG e os commits em português; README em inglês
   tamanho, `[7]` classe, `[8]` id, argumentos a partir de `[9]`, `[89]` XOR de `[3..88]`; "get" = "set" | 0x80; status
   2 ok, 1 ocupado, 3 falhou, 5 sem suporte. Usados: Snap Tap `02 A7/27`, atuação múltipla `02 99/19`
   (`[0, slot, {tecla, H(2), L(2)} x até 15]`, palavras big-endian), rapid trigger múltiplo `02 9A/1A`
-  (`[0, slot, {tecla, ligado, sobe(2), desce(2)} x até 13]`), polling de 8 kHz `00 C0/40` (`[0, código]`, 0x01 =
-  8000 Hz ... 0x40 = 125 Hz, códigos do openrazer), brilho `0F 84/04` (`[1, 0, 0..255]`). **O tamanho do pacote tem que
+  (`[0, slot, {tecla, ligado, sobe(2), desce(2)} x até 13]`), polling de 8 kHz `00 C0/40` (`[perfil, código]`,
+  o perfil vivo é o 1; com 0 o teclado aceita e não muda nada; `USB_HIGH_SPEED_POLLING_PERIOD_VALUE` do Synapse:
+  0x01 = 8000 Hz ... 0x20 = 250 Hz, 0x40 = 125 Hz), brilho `0F 84/04` (`[1, 0, 0..255]`). **O tamanho do pacote tem que
   ser o dos dados de verdade** (2 + 5 por tecla), como o Synapse manda; com 80 o teclado responde status 3.
   Escala analógica: 0..65535 = 0..4 mm (`actuationInfo` do Synapse: `binaryRange 65535`; 1638 = 0,1 mm). Cada tecla
   guarda dois limites com 0,1 mm de diferença; **o mais fundo (L) é onde a tecla vale e o raso (H) onde solta**
@@ -51,15 +52,24 @@ inglês; este arquivo, o CHANGELOG e os commits em português; README em inglês
   bateria 0x1004; G733 (0AFE) luz 0x8070 idx 4 (2 zonas), EQ 0x8310 idx 6 (10 bandas, ±12 dB), sidetone 0x8300 idx 7,
   bateria por tensão 0x1F20 idx 8. O G733 responde `ffffffff` como unit id: a chave dele cai no product id.
   Bateria por tensão usa a curva do próprio G HUB (`C:\ProgramData\LGHUB\depots\...\battery_<pid>.xml`) quando
-  existe (3,625 V = 5%, igual ao G HUB). **Escritas tiradas do Solaar/libratbag, não conferidas no aparelho ainda:**
-  SetSensorDpi `fn3 [0, hi, lo]`, SetReportRate `fn2 [ms]`, SetMode onboard `fn1 [1|2]`, efeitos `0x8071 fn1` /
-  `0x8070 fn3` `[zona, índice do efeito, 10 parâmetros, 0x01]`, sidetone `fn1 [0..100]`, EQ `fn3 [0x02, ganhos]`
-  (o prefixo 0x02 é o que o Solaar manda: conferir).
+  existe (3,625 V = 5%, igual ao G HUB). Escritas (formato do Solaar/libratbag), **conferidas no aparelho em 06/11/2026**: SetSensorDpi `fn3 [0, hi, lo]`,
+  SetReportRate `fn2 [ms]`, efeitos `0x8071 fn1` / `0x8070 fn3` `[zona, índice do efeito, 10 parâmetros, 0x01]`
+  (o G733 ficou vermelho), sidetone `fn1 [0..100]`. **EQ do G733: o fone recusa toda escrita** (erro 2 com só os
+  ganhos e com os prefixos 00 a 03), e um escutador passivo mostrou que o G HUB não manda nada ao fone quando o EQ
+  muda: o EQ do G HUB é feito no PC (driver de áudio). A página só mostra os controles de EQ se regravar os ganhos
+  atuais for aceito. SetMode onboard `fn1 [1|2]` continua sem teste. **Luz do G502:** com o G HUB em `control:
+  LAMPARRAY` a Iluminação Dinâmica do Windows regrava a cor o tempo todo e a nossa não aparece (o G733, em
+  `FIRMWARE`, aceita); a página avisa quando o G HUB diz LAMPARRAY. **Sem fio:** o G502 dormindo responde "aparelho
+  desconhecido" atrás do receptor e acordar não muda caminho HID; o hub pinga os slots do receptor vazio a cada 20 s
+  (`ReceiverHasDevice`) e só então faz a busca completa. Pelo receptor ele aparece no índice 01 (unit id igual ao do cabo).
 - **G HUB aberto** (`GHubClient.cs`): `ws://localhost:9010`, subprotocolo `json`, `Origin: file://`; o agente manda
-  OPTIONS "/" ao conectar; `pid` do `/devices/list` é o product id em decimal. DPI vai pelo cartão MOUSE_SETTINGS do
-  perfil ativo (`GET /card`, troca `activeDpi` e o nível igual ao antigo, `SET /assignment` com `updateCard`), sidetone
-  por `SET /audio/<id>/sidetone`, memória por `SET /onboard_profiles/<id>/onboard_mode`. Formato tirado do
-  `app.asar` do G HUB, **não testado** com escrita. Sem resposta do G HUB, cai no HID++ direto.
+  OPTIONS "/" ao conectar; `pid` do `/devices/list` é o product id em decimal (o id do G HUB é procurado pelo id USB
+  atual e pelos model ids do aparelho). Sidetone vai por `SET /audio/<id>/sidetone` (testado: chegou ao fone), memória
+  por `SET /onboard_profiles/<id>/onboard_mode` (sem teste). **DPI vai sempre direto pelo HID++** (testado: segura com
+  o G HUB aberto até ele trocar de perfil). **Não fazer de novo:** editar o cartão MOUSE_SETTINGS (`SET /assignment`)
+  só mudou a tabela do G HUB, não o mouse, e trocar "o nível igual ao antigo" pelo novo embaralhou a ordem da tabela de
+  DPI dele no primeiro teste (desfeito na hora, conferido: 800, 1600, 2400, 3200, 25600, ativo 2400). `SET
+  /audio/<id>/onboard` recusa o EQ do G733 ("Failed to set onboard Equalizer").
 - **RAM Corsair** (`Devices/Corsair/`): o **CORSAIR Device Control Service** (LocalSystem, o "CORSAIR RGB DRAM
   Service") escreve no SMBus com o driver da própria Corsair; o iCUE.exe é só cliente dele. Protocolo lido estático da
   `CorsairDeviceControlServiceAPI.dll` e do serviço: pipes `\\.\pipe\CorsairUtilityEngine\{A78E0942-12BB-4E77-B359-3B14722A80EA}_in/_out`,
@@ -69,8 +79,10 @@ inglês; este arquivo, o CHANGELOG e os commits em português; README em inglês
   `CDCSSetLedColors {"colors":[{"id","color":"ffrrggbb"}]}`. Fechar a sessão devolve a luz ao efeito gravado no
   pente. O serviço é Manual mas Authenticated Users podem iniciar (`StartServiceW`). **Nunca chamar** `CDCSUpdateFw`,
   `CDCSSetPerfProfile`, `CDCSClearPerfProfile` (firmware e XMP/tensões). Conectar avisa o iCUE (que, com
-  "CORSAIR RGB DRAM Service Access" em NotifyMe, pergunta ao Felipe). **Nada foi enviado ao serviço ainda**: o
-  primeiro teste é com ele vendo a tela; a ordem `aarrggbb` e os ids de LED estão por confirmar. A escolha fica em
+  "CORSAIR RGB DRAM Service Access" em NotifyMe, pergunta ao Felipe). **Testado com ele olhando em 06/11/2026**: `ffff0000`
+  deixou os pentes vermelhos (a ordem é `aarrggbb`), 1 aparelho com 20 LEDs (10 por pente). Com o iCUE fechado não
+  houve pergunta; o serviço, parado, foi iniciado pelo app, instalou o driver LLA dele mesmo e parou sozinho quando a
+  sessão acabou (log em `C:\ProgramData\Corsair\Logs\CorsairDeviceControlService`, hora em UTC). A escolha fica em
   `settings.json` (`ramColor`, `modo:#hex`) e é retomada ao abrir. Respiração e arco-íris são desenhados aqui a 25 qps.
 - **DSX** (`Controllers/Dsx.cs`): o mesmo servidor de mods que a ilha usa (UDP 127.0.0.1:6969 ou a porta do
   `app_settings.json`), `{"instructions":[{"type","parameters":[índice, ...]}]}`. Só aparece com o `DSX.exe` aberto.
@@ -99,11 +111,15 @@ inglês; este arquivo, o CHANGELOG e os commits em português; README em inglês
 
 - Testado: autoteste (`--self-test`, 19 itens: pacotes da Razer contra valores lidos, efeitos e bateria da Logitech,
   layout e CRC do DualSense, pacote do DSX, comparação de versão); sondagem só de leitura (`--probe`) em todos os
-  aparelhos presentes; fotos de todas as páginas (`--screenshot`); bandeja, `--quit`, memória e CPU medidas.
+  aparelhos presentes; fotos de todas as páginas (`--screenshot`); bandeja, `--quit`, memória e CPU medidas; segunda
+  cópia com `--tray` sai calada (no logon a tarefa do Desktop Glow e o Run abrem duas).
+- **Escritas testadas uma a uma com ele (`--write-test <passo>`: escreve, lê de volta, devolve):** Razer atuação,
+  rapid trigger, polling e brilho; G502 DPI e taxa; G733 sidetone e luz (vista vermelha); RAM (vista vermelha); zoom da
+  webcam. Luz do G502 aceita mas não aparece (Iluminação Dinâmica, acima).
 - Uma queda do .NET (0xC0000005 no coreclr) apareceu uma vez na foto da página da Razer antes da correção do
   deadlock da Iluminação Dinâmica e não voltou em dez execuções. Se voltar, olhar o `HidStream` (E/S sobreposta).
-- **Não testado:** toda escrita nova (atuação, rapid trigger, polling, brilho da Razer; tudo da Logitech; RAM; DSX;
-  DualSense; webcam; Iluminação Dinâmica), perfis aplicando de verdade, atualizador (não há release), instalação.
+- **Não testado:** DSX e DualSense (nenhum controle ligado), memória onboard da Logitech, Iluminação Dinâmica pela
+  página, perfis aplicando de verdade num jogo, atualizador (não há release), instalação pelo `instalar.ps1`.
 
 ## Comandos
 

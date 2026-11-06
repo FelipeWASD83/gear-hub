@@ -11,7 +11,7 @@ vendor's own service where the hardware leaves no other way.
 | Device | What you can change | How |
 |---|---|---|
 | Razer Huntsman V3 HE TKL | Snap Tap (on/off, pairs, mode), actuation point and rapid trigger per key, polling rate up to 8 kHz, brightness | USB feature reports, the protocol Synapse 4 uses |
-| Logitech mice and headsets (HID++ 2.0) | DPI with presets, report rate, onboard memory, lighting per zone, sidetone, 10-band equalizer, battery | HID++ straight to the device; with G HUB open, DPI, sidetone and onboard mode go through G HUB's local agent so it does not undo them |
+| Logitech mice and headsets (HID++ 2.0) | DPI with presets, report rate, onboard memory, lighting per zone, sidetone, equalizer (on devices that store one; the G733 does not), battery | HID++ straight to the device, wired or through the receiver; with G HUB open, sidetone and onboard mode go through G HUB's local agent |
 | Corsair RGB memory | Fixed colour, breathing, rainbow, or back to the module's own effect | The CORSAIR Device Control Service (the one iCUE itself uses); the iCUE window can stay closed |
 | DSX | Adaptive triggers, light bar, mic light | DSX's mod server (UDP on 127.0.0.1) |
 | DualSense / DualSense Edge (DSX closed) | Adaptive triggers, light bar, player LEDs, battery | HID output reports over USB or Bluetooth |

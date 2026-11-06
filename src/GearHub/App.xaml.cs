@@ -36,11 +36,14 @@ public partial class App : Application
         AppSettings.Load();
         if (first == "--self-test") return SelfTest.Run(args.Length > 1 ? args[1] : null);
         if (first == "--probe") return SelfTest.Probe(args.Length > 1 ? args[1] : null);
+        if (first == "--write-test" && args.Length > 1) return SelfTest.WriteTest(args[1], args.Length > 2 ? args[2] : null);
 
         bool screenshot = first == "--screenshot";
         if (!screenshot && !SingleInstance.Claim())
         {
-            SingleInstance.SignalShow();
+            // at logon the Desktop Glow task and the Run entry both start a copy with --tray: the late one leaves
+            // quietly; only a copy the person opened (no --tray) brings the window up
+            if (first != "--tray") SingleInstance.SignalShow();
             return 0;
         }
 

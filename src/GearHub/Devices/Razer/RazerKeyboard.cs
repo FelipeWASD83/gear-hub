@@ -155,7 +155,8 @@ internal sealed class RazerKeyboard : Gear
     /// <summary>Polling rate in Hz, or 0 when the keyboard does not say.</summary>
     public int ReadPolling()
     {
-        if (Command(RazerProtocol.GetHighPolling, ReadOnlySpan<byte>.Empty) is { Length: >= 2 } d)
+        // [profile, code] both ways (Synapse's setUsbHighSpeedPollingPeriod); the live profile is slot 1
+        if (Command(RazerProtocol.GetHighPolling, new[] { RazerProtocol.LiveSlot }) is { Length: >= 2 } d)
             foreach (var (code, hz) in RazerProtocol.PollingRates)
                 if (d[1] == code) return hz;
         return 0;
@@ -164,7 +165,7 @@ internal sealed class RazerKeyboard : Gear
     public bool WritePolling(int hz)
     {
         foreach (var (code, rate) in RazerProtocol.PollingRates)
-            if (rate == hz) return Command(RazerProtocol.SetHighPolling, new byte[] { 0, code }) != null;
+            if (rate == hz) return Command(RazerProtocol.SetHighPolling, new byte[] { RazerProtocol.LiveSlot, code }) != null;
         return false;
     }
 

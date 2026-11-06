@@ -181,8 +181,8 @@ internal static class RazerProtocol
         return list;
     }
 
-    /// <summary>The 8 kHz-capable polling codes (openrazer's polling rate 2): code → Hz.</summary>
-    public static readonly (byte Code, int Hz)[] PollingRates = { (0x01, 8000), (0x02, 4000), (0x04, 2000), (0x08, 1000), (0x10, 500), (0x40, 125) };
+    /// <summary>Synapse's USB_HIGH_SPEED_POLLING_PERIOD_VALUE: code → Hz.</summary>
+    public static readonly (byte Code, int Hz)[] PollingRates = { (0x01, 8000), (0x02, 4000), (0x04, 2000), (0x08, 1000), (0x10, 500), (0x20, 250), (0x40, 125) };
 
     // Synapse's analog key ids (its layout table)
     public static readonly (byte Id, string Name)[] Keys =

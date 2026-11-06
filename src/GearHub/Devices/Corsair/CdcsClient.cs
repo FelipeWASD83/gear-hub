@@ -217,6 +217,13 @@ internal sealed class CdcsClient : IDisposable
         return Call(new JsonObject { ["method"] = "CDCSSetLedColors", ["id"] = id, ["colors"] = list }) != null;
     }
 
+    /// <summary>Every LED of a device with one colour string as is (to find the byte order on the hardware).</summary>
+    public bool SetColorsRaw(int id, IEnumerable<int> leds, string color)
+    {
+        var list = new JsonArray(leds.Select(l => (JsonNode)new JsonObject { ["id"] = l, ["color"] = color }).ToArray());
+        return Call(new JsonObject { ["method"] = "CDCSSetLedColors", ["id"] = id, ["colors"] = list }) != null;
+    }
+
     public void Dispose()
     {
         var cb = _callback;

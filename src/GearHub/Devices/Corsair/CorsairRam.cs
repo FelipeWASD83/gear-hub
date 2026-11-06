@@ -177,6 +177,19 @@ internal sealed class CorsairRam : Gear
         return Color.FromRgb((byte)(r * 255), (byte)(g * 255), (byte)(b * 255));
     }
 
+    /// <summary>Test only: holds the LEDs and paints them with a raw colour string.</summary>
+    public string? PaintRaw(string color)
+    {
+        lock (_gate)
+        {
+            StopAnimation();
+            if (!EnsureClient(out string? error)) return error;
+            bool ok = true;
+            foreach (var (dev, leds) in _targets) ok &= _client!.SetColorsRaw(dev, leds.Select(l => l.Id), color);
+            return ok ? null : "recusado";
+        }
+    }
+
     public override JsonObject? Capture() => new() { ["mode"] = _mode, ["color"] = Page.Hex(_color) };
 
     public override void Apply(JsonObject s)

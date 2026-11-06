@@ -85,6 +85,209 @@ internal static class SelfTest
         return _fail == 0 ? 0 : 1;
     }
 
+    /// <summary>
+    /// --write-test &lt;step&gt; &lt;file&gt;: one write at a time, read back to prove the device took it, then the value from
+    /// before is written again. Steps: razer-actuation, razer-rapid, razer-polling, razer-brightness, logi-dpi,
+    /// logi-rate, logi-light, g733-sidetone, g733-eq, g733-light, ram, webcam.
+    /// </summary>
+    public static int WriteTest(string step, string? file)
+    {
+        var hub = DeviceHub.Instance;
+        hub.Scan(force: true);
+        void Line(string s) => Out.AppendLine(s);
+        try
+        {
+            var razer = hub.Gears.OfType<RazerKeyboard>().FirstOrDefault();
+            var mouse = hub.Gears.OfType<LogitechGear>().FirstOrDefault(g => g.Device.Has(HidppDevice.AdjustableDpi));
+            var headset = hub.Gears.OfType<LogitechGear>().FirstOrDefault(g => g.Device.Has(HidppDevice.Sidetone));
+            switch (step)
+            {
+                case "razer-actuation" when razer != null:
+                {
+                    var before = razer.ReadActuation(new byte[] { 18 }).Single();
+                    var test = new KeyActuation(18, RazerProtocol.FromMm(before.ReleaseMm + 0.2), RazerProtocol.FromMm(before.PressMm + 0.2));
+                    Line($"W antes: {before.PressMm} mm (solta {before.ReleaseMm})");
+                    Line($"escreveu {test.PressMm}: {razer.WriteActuation(new[] { test })}");
+                    var after = razer.ReadActuation(new byte[] { 18 }).Single();
+                    Line($"lido de volta: {after.PressMm} mm (solta {after.ReleaseMm}) -> {(after == test ? "OK" : "DIFERENTE")}");
+                    Line($"devolveu: {razer.WriteActuation(new[] { before })}, agora {razer.ReadActuation(new byte[] { 18 }).Single().PressMm} mm");
+                    break;
+                }
+                case "razer-rapid" when razer != null:
+                {
+                    var before = razer.ReadRapid(new byte[] { 18 }).Single();
+                    var test = before with { Enabled = !before.Enabled, Up = RazerProtocol.FromMm(0.3), Down = RazerProtocol.FromMm(0.3) };
+                    Line($"W antes: {(before.Enabled ? "ligado" : "desligado")} {before.DownMm} mm");
+                    Line($"escreveu {(test.Enabled ? "ligado" : "desligado")} 0,3 mm: {razer.WriteRapid(new[] { test })}");
+                    var after = razer.ReadRapid(new byte[] { 18 }).Single();
+                    Line($"lido de volta: {(after.Enabled ? "ligado" : "desligado")} {after.DownMm} mm -> {(after == test ? "OK" : "DIFERENTE")}");
+                    Line($"devolveu: {razer.WriteRapid(new[] { before })}, agora {(razer.ReadRapid(new byte[] { 18 }).Single() == before ? "igual ao antes" : "DIFERENTE")}");
+                    break;
+                }
+                case "razer-polling" when razer != null:
+                {
+                    int before = razer.ReadPolling();
+                    int test = before == 1000 ? 8000 : 1000;
+                    Line($"antes: {before} Hz; escreveu {test}: {razer.WritePolling(test)}; lido: {razer.ReadPolling()} Hz");
+                    Line($"devolveu {before}: {razer.WritePolling(before)}; agora {razer.ReadPolling()} Hz");
+                    break;
+                }
+                case "razer-brightness" when razer != null:
+                {
+                    int before = razer.ReadBrightness();
+                    Line($"antes: {before}; escreveu 40: {razer.WriteBrightness(40)}; lido: {razer.ReadBrightness()}");
+                    System.Threading.Thread.Sleep(2500);
+                    Line($"devolveu {before}: {razer.WriteBrightness(before)}; agora {razer.ReadBrightness()}");
+                    break;
+                }
+                case "logi-dpi" when mouse != null:
+                {
+                    int before = mouse.ReadDpi();
+                    int test = before == 1600 ? 1200 : 1600;
+                    Line($"G HUB aberto: {VendorApps.GHub}; antes: {before}; escreveu {test}: {mouse.WriteDpi(test)}");
+                    System.Threading.Thread.Sleep(800);
+                    Line($"lido no mouse: {mouse.ReadDpi()}");
+                    Line($"devolveu {before}: {mouse.WriteDpi(before)}");
+                    System.Threading.Thread.Sleep(800);
+                    Line($"agora: {mouse.ReadDpi()}");
+                    break;
+                }
+                case "logi-rate" when mouse != null:
+                {
+                    var (opts, before) = mouse.ReadRate();
+                    int test = before == 1 ? 2 : 1;
+                    mouse.WriteRate(test);
+                    Line($"antes: {before} ms; escreveu {test} ms; lido {mouse.ReadRate().Current} ms");
+                    mouse.WriteRate(before);
+                    Line($"devolveu {before} ms; agora {mouse.ReadRate().Current} ms");
+                    break;
+                }
+                case "logi-light" when mouse != null:
+                case "g733-light" when headset != null:
+                {
+                    var g = step == "logi-light" ? mouse! : headset!;
+                    foreach (var z in g.ReadZones())
+                    {
+                        g.WriteEffect(z, LogitechGear.EffectFixed, System.Windows.Media.Color.FromRgb(255, 0, 0));
+                        Line($"zona {z.Index}: vermelho fixo aceito");
+                    }
+                    System.Threading.Thread.Sleep(3000);
+                    foreach (var z in g.ReadZones())
+                    {
+                        // the G733 was on a 1 s cycle in G HUB (06/11/2026)
+                        g.WriteEffect(z, LogitechGear.EffectCycle, System.Windows.Media.Colors.Black, step == "g733-light" ? 1000 : 5000);
+                        Line($"zona {z.Index}: ciclo aceito (o G HUB e a Iluminação Dinâmica podem pôr o deles de volta)");
+                    }
+                    break;
+                }
+                case "g733-sidetone" when headset != null:
+                {
+                    int before = headset.ReadSidetone();
+                    headset.WriteSidetone(before == 20 ? 30 : 20);
+                    System.Threading.Thread.Sleep(500);
+                    Line($"antes: {before}; lido depois de escrever: {headset.ReadSidetone()}");
+                    headset.WriteSidetone(before);
+                    System.Threading.Thread.Sleep(500);
+                    Line($"devolveu {before}; agora {headset.ReadSidetone()}");
+                    break;
+                }
+                case "g733-eq" when headset != null:
+                {
+                    int bands = headset.EqInfo().Bands;
+                    var before = headset.ReadEq(bands);
+                    var test = before.ToArray();
+                    test[0] = (sbyte)(before[0] == 3 ? 4 : 3);
+                    Line($"antes: {string.Join(",", before)}");
+                    // the layouts public code uses: gains only, or one prefix byte before them
+                    foreach (int? prefix in new int?[] { null, 0x00, 0x01, 0x02, 0x03 })
+                    {
+                        string name = prefix == null ? "só os ganhos" : $"prefixo {prefix:X2}";
+                        try
+                        {
+                            headset.WriteEq(test, prefix);
+                            var read = headset.ReadEq(bands);
+                            Line($"{name}: aceito, lido {string.Join(",", read)} -> {(read.SequenceEqual(test) ? "OK" : "diferente")}");
+                            headset.WriteEq(before, prefix);
+                            Line($"   devolveu; agora {string.Join(",", headset.ReadEq(bands))}");
+                            if (read.SequenceEqual(test)) break;
+                        }
+                        catch (HidppException e) { Line($"{name}: recusado ({e.Message})"); }
+                    }
+                    break;
+                }
+                case "logi-dpi-direct" when mouse != null:
+                {
+                    int before = mouse.ReadDpi();
+                    int test = before == 1600 ? 1200 : 1600;
+                    mouse.Device.Call(HidppDevice.AdjustableDpi, 3, 0, (byte)(test >> 8), (byte)test);
+                    Line($"antes {before}; HID++ direto {test}");
+                    for (int i = 1; i <= 4; i++) { System.Threading.Thread.Sleep(1000); Line($"   {i} s depois: {mouse.ReadDpi()}"); }
+                    mouse.Device.Call(HidppDevice.AdjustableDpi, 3, 0, (byte)(before >> 8), (byte)before);
+                    System.Threading.Thread.Sleep(500);
+                    Line($"devolveu {before}; agora {mouse.ReadDpi()}");
+                    break;
+                }
+                case "lights-slow":
+                {
+                    // announced to him beforehand: 10 s wait, G502 red 8 s, G733 red 8 s, RAM "ffff0000" 7 s then "ff0000ff" 7 s
+                    var red = System.Windows.Media.Color.FromRgb(255, 0, 0);
+                    System.Threading.Thread.Sleep(10000);
+                    foreach (var (g, name, period) in new[] { (mouse, "G502", 5000), (headset, "G733", 1000) })
+                    {
+                        if (g == null) continue;
+                        var zones = g.ReadZones();
+                        foreach (var z in zones) g.WriteEffect(z, LogitechGear.EffectFixed, red);
+                        Line($"{DateTime.Now:HH:mm:ss} {name} vermelho");
+                        System.Threading.Thread.Sleep(8000);
+                        foreach (var z in zones) g.WriteEffect(z, LogitechGear.EffectCycle, System.Windows.Media.Colors.Black, period);
+                        Line($"{DateTime.Now:HH:mm:ss} {name} ciclo");
+                        System.Threading.Thread.Sleep(2000);
+                    }
+                    var ram = hub.Gears.OfType<CorsairRam>().FirstOrDefault();
+                    if (ram != null)
+                    {
+                        Line($"{DateTime.Now:HH:mm:ss} RAM ffff0000: {ram.PaintRaw("ffff0000") ?? "aceito"}");
+                        System.Threading.Thread.Sleep(7000);
+                        Line($"{DateTime.Now:HH:mm:ss} RAM ff0000ff: {ram.PaintRaw("ff0000ff") ?? "aceito"}");
+                        System.Threading.Thread.Sleep(7000);
+                        ram.Set(CorsairRam.Release, System.Windows.Media.Colors.White, save: false);
+                        Line($"{DateTime.Now:HH:mm:ss} RAM solta");
+                    }
+                    break;
+                }
+                case "ram":
+                {
+                    var ram = hub.Gears.OfType<CorsairRam>().FirstOrDefault();
+                    if (ram == null) { Line("sem o serviço da Corsair"); break; }
+                    Line($"iCUE aberto: {VendorApps.Icue}");
+                    string? err = ram.Set(CorsairRam.Fixed, System.Windows.Media.Color.FromRgb(255, 0, 0), save: false);
+                    Line(err ?? "vermelho fixo aceito pelo serviço");
+                    System.Threading.Thread.Sleep(4000);
+                    ram.Set(CorsairRam.Release, System.Windows.Media.Colors.White, save: false);
+                    Line("soltou: os pentes voltam ao efeito deles");
+                    break;
+                }
+                case "webcam":
+                {
+                    var cam = hub.Gears.OfType<Devices.Webcam.Webcam>().FirstOrDefault();
+                    var zoom = cam?.Read().FirstOrDefault(p => p.Camera && p.Id == 3);
+                    if (cam == null || zoom == null) { Line("sem câmera com zoom"); break; }
+                    int test = zoom.Value == 150 ? 160 : 150;
+                    Line($"zoom antes {zoom.Value}; escreveu {test}: {cam.Write(true, 3, test, false)}; lido {cam.Read().First(p => p.Camera && p.Id == 3).Value}");
+                    Line($"devolveu: {cam.Write(true, 3, zoom.Value, zoom.Auto)}; agora {cam.Read().First(p => p.Camera && p.Id == 3).Value}");
+                    break;
+                }
+                default:
+                    Line($"passo desconhecido ou aparelho ausente: {step}");
+                    break;
+            }
+        }
+        catch (Exception e) { Line("ERRO: " + e.GetType().Name + ": " + e.Message); }
+        Finish(file);
+        hub.Dispose();
+        return 0;
+    }
+
     /// <summary>Read-only: lists what the hub finds and what each device answers to "get".</summary>
     public static int Probe(string? file)
     {

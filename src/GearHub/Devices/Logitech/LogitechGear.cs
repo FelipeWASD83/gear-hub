@@ -57,6 +57,8 @@ internal sealed class LogitechGear : Gear
             var list = g.ToList();
             if (list.Any(h => skipPaths.Contains(h.Path))) continue;
             var link = HidppLink.Open(list);
+            if (Environment.GetEnvironmentVariable("GEARHUB_TRACE") == "1")
+                Log.Write($"logitech: {g.Key.Product:X4} mi_{g.Key.Interface:X2}, {list.Count} collections ({string.Join(", ", list.Select(h => $"{h.UsagePage:X4}/{h.Usage:X} in {h.InputLength} out {h.OutputLength}"))}), link {(link == null ? "not opened" : "open")}");
             if (link == null) continue;
             bool used = false;
             var wired = HidppDevice.Probe(link, 0xFF, g.Key.Product);
@@ -80,6 +82,25 @@ internal sealed class LogitechGear : Gear
             if (!used) link.Dispose();
         }
         return found;
+    }
+
+    /// <summary>A quick ping on each slot of the given receivers (nothing else): does anyone answer now?</summary>
+    public static bool ReceiverHasDevice(IEnumerable<HidInfo> receiverCollections)
+    {
+        foreach (var g in receiverCollections.GroupBy(h => (h.Product, h.Interface)))
+        {
+            using var link = HidppLink.Open(g.ToList());
+            if (link == null) continue;
+            for (byte slot = 1; slot <= 6; slot++)
+            {
+                try
+                {
+                    if (link.Request(slot, 0x00, 1, new byte[] { 0, 0, 0x5A }, 250)[0] >= 2) return true;
+                }
+                catch (HidppException) { }
+            }
+        }
+        return false;
     }
 
     public string LinkPath => _d.Link.Path;
@@ -113,9 +134,12 @@ internal sealed class LogitechGear : Gear
         return r[1] << 8 | r[2];
     }
 
+    /// <summary>
+    /// Straight to the sensor, also with G HUB open (tested on 06/11/2026: it held; G HUB puts its own back on a profile
+    /// switch). Editing G HUB's MOUSE_SETTINGS card instead only changed G HUB's table, not the mouse.
+    /// </summary>
     public bool WriteDpi(int dpi)
     {
-        if (VendorApps.GHub && GHubClient.With(c => c.DeviceId(_product, out string model) is { } && c.SetDpi(model, dpi)) == true) return true;
         _d.Call(HidppDevice.AdjustableDpi, 3, 0, (byte)(dpi >> 8), (byte)dpi);
         return true;
     }
@@ -138,17 +162,21 @@ internal sealed class LogitechGear : Gear
     {
         if (VendorApps.GHub)
         {
-            bool? ok = GHubClient.With(c => c.DeviceId(_product, out _) is { } id && c.SetOnboard(id, onboard));
+            bool? ok = GHubClient.With(c => GHubId(c) is { } id && c.SetOnboard(id, onboard));
             if (ok == true) return;
         }
         _d.Call(HidppDevice.OnboardProfiles, 1, (byte)(onboard ? 1 : 2));
     }
 
+    /// <summary>G HUB's id for this device, by the USB id it is on now or any model id it reports (receiver).</summary>
+    private string? GHubId(GHubClient c) =>
+        new[] { _product }.Concat(_d.ModelIds).Select(pid => c.DeviceId(pid, out _)).FirstOrDefault(id => id != null);
+
     public int ReadSidetone() => _d.Call(HidppDevice.Sidetone, 0)[0];
 
     public void WriteSidetone(int level)
     {
-        if (VendorApps.GHub && GHubClient.With(c => c.DeviceId(_product, out _) is { } id && c.SetSidetone(id, level)) == true) return;
+        if (VendorApps.GHub && GHubClient.With(c => GHubId(c) is { } id && c.SetSidetone(id, level)) == true) return;
         _d.Call(HidppDevice.Sidetone, 1, (byte)Math.Clamp(level, 0, 100));
     }
 
@@ -164,12 +192,17 @@ internal sealed class LogitechGear : Gear
         return r.Take(bands).Select(b => unchecked((sbyte)b)).ToArray();
     }
 
-    /// <summary>SetGains with the persist prefix 0x02 Solaar sends (to confirm on the device).</summary>
-    public void WriteEq(sbyte[] gains)
+    /// <summary>SetGains layout: null = gains only, else the prefix byte before them (EqPrefix, found on the device).</summary>
+    public static int? EqPrefix = 0x02;
+
+    public void WriteEq(sbyte[] gains) => WriteEq(gains, EqPrefix);
+
+    public void WriteEq(sbyte[] gains, int? prefix)
     {
-        var p = new byte[1 + gains.Length];
-        p[0] = 0x02;
-        for (int i = 0; i < gains.Length; i++) p[1 + i] = unchecked((byte)gains[i]);
+        int o = prefix == null ? 0 : 1;
+        var p = new byte[o + gains.Length];
+        if (prefix is int pre) p[0] = (byte)pre;
+        for (int i = 0; i < gains.Length; i++) p[o + i] = unchecked((byte)gains[i]);
         _d.Call(HidppDevice.Equalizer, 3, p);
     }
 
@@ -317,6 +350,8 @@ internal sealed class LogitechGear : Gear
         public int Sidetone = -1;
         public (int Bands, int Range)? Eq;
         public sbyte[] Gains = Array.Empty<sbyte>();
+        public bool EqWritable;
+        public bool LampArray;
     }
 
     public override void BuildPage(Page p)
@@ -324,8 +359,8 @@ internal sealed class LogitechGear : Gear
         string kind = Kind switch { GearKind.Headset => Lang.T("Headset", "Headset"), GearKind.Keyboard => Lang.T("Teclado", "Keyboard"), _ => "Mouse" };
         p.Header(Name, kind + " Logitech, " + Lang.T("falando direto com o aparelho (HID++).", "talking straight to the device (HID++)."));
         if (VendorApps.GHub)
-            p.Note(p.Root, Lang.T("O G HUB está aberto: DPI, sidetone e memória passam por ele, para ele não desfazer. O resto vai direto, e ele pode regravar quando trocar de perfil.",
-                "G HUB is open: DPI, sidetone and memory go through it so it does not undo them. The rest goes straight to the device, and G HUB may write over it on a profile switch."), true);
+            p.Note(p.Root, Lang.T("O G HUB está aberto: sidetone e memória passam por ele. O resto vai direto ao aparelho, e o G HUB pode pôr o dele de volta quando trocar de perfil.",
+                "G HUB is open: sidetone and memory go through it. The rest goes straight to the device, and G HUB may put its own back on a profile switch."), true);
         var loading = p.Note(p.Root, Lang.T("Lendo o aparelho...", "Reading the device..."));
         p.Work(() =>
         {
@@ -336,7 +371,27 @@ internal sealed class LogitechGear : Gear
             if (_d.Has(HidppDevice.OnboardProfiles)) s.Onboard = Try(ReadOnboard);
             try { s.Zones = ReadZones(); } catch (HidppException) { }
             if (_d.Has(HidppDevice.Sidetone)) s.Sidetone = Try(ReadSidetone) ?? -1;
-            if (_d.Has(HidppDevice.Equalizer)) { s.Eq = Try(EqInfo); if (s.Eq is { } eq) try { s.Gains = ReadEq(eq.Bands); } catch (HidppException) { } }
+            if (_d.Has(HidppDevice.Equalizer))
+            {
+                s.Eq = Try(EqInfo);
+                if (s.Eq is { } eq)
+                {
+                    try
+                    {
+                        s.Gains = ReadEq(eq.Bands);
+                        // writing the same gains changes nothing and says whether the device takes EQ writes at all:
+                        // the G733 refuses every layout (error 2) and G HUB does its EQ on the PC instead (06/11/2026)
+                        WriteEq(s.Gains);
+                        s.EqWritable = true;
+                    }
+                    catch (HidppException) { }
+                }
+            }
+            // Windows lists a lamp array for both the G502 and the G733, but only drives the one G HUB hands it
+            // ("control": "LAMPARRAY"); the G733 on "FIRMWARE" took our colour. Without G HUB there is no telling.
+            var lights = DeviceHub.Instance.Gears.OfType<Lighting.DynamicLights>().FirstOrDefault();
+            if (s.Zones.Count > 0 && lights != null && new[] { _product }.Concat(_d.ModelIds).Any(lights.Covers))
+                s.LampArray = GHubClient.With(c => GHubId(c) is { } id && c.LightingControl(id) == "LAMPARRAY") == true;
             return s;
         }, s =>
         {
@@ -392,8 +447,11 @@ internal sealed class LogitechGear : Gear
 
         if (s.Zones.Count > 0)
         {
-            var sec = p.Section(Lang.T("Luz", "Lighting"), VendorApps.GHub ? Lang.T("Se o G HUB ou a Iluminação Dinâmica do Windows estiverem mandando na luz, eles podem voltar ao que era.",
-                "If G HUB or Windows Dynamic Lighting are driving the light, they may put it back.") : null);
+            var sec = p.Section(Lang.T("Luz", "Lighting"), VendorApps.GHub ? Lang.T("Se o G HUB trocar de perfil, ele pode pôr a luz dele de volta.",
+                "If G HUB switches profile, it may put its own light back.") : null);
+            if (s.LampArray)
+                p.Note(sec, Lang.T("A Iluminação Dinâmica do Windows está mandando na luz deste aparelho e regrava a cor o tempo todo, então o que for escolhido aqui não aparece. Para o Gear Hub mandar, desligue o aparelho em Configurações > Personalização > Iluminação dinâmica (ou mude a cor na página Iluminação Dinâmica, com esta janela na frente).",
+                    "Windows Dynamic Lighting is driving this device's light and keeps writing over it, so what you pick here will not show. To drive it from Gear Hub, turn the device off in Settings > Personalization > Dynamic Lighting (or change the colour on the Dynamic Lighting page, with this window in front)."), true);
             foreach (var z in s.Zones)
             {
                 var zone = z;
@@ -413,7 +471,10 @@ internal sealed class LogitechGear : Gear
             if (s.Sidetone >= 0)
                 p.Row(sec, "Sidetone", Lang.T("Quanto da sua voz volta no fone.", "How much of your voice comes back in the headset."),
                     p.Slider(0, 100, 1, s.Sidetone, v => $"{v:0}%", v => { int l = (int)v; p.Work(() => WriteSidetone(l), () => p.Say($"Sidetone {l}%"), fail); }));
-            if (s.Eq is { } eq && eq.Bands > 0)
+            if (s.Eq is { } && !s.EqWritable)
+                p.Note(sec, Lang.T("Equalizador: este aparelho não aceita EQ gravado nele. O do G HUB é feito no PC (pelo driver de áudio da Logitech), não no fone.",
+                    "Equalizer: this device does not take a stored EQ. G HUB's EQ runs on the PC (Logitech's audio driver), not in the headset."));
+            if (s.Eq is { } eq && eq.Bands > 0 && s.EqWritable)
             {
                 p.Note(sec, Lang.T("Equalizador gravado no fone (vale em qualquer programa).", "Equalizer stored in the headset (works in any app)."));
                 string[] freqs = eq.Bands == 10 ? new[] { "32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k" } : Enumerable.Range(1, eq.Bands).Select(i => i.ToString()).ToArray();

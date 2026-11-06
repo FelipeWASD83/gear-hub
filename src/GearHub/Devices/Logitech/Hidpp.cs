@@ -102,6 +102,7 @@ internal sealed class HidppDevice
     public int Type { get; private set; } = -1;
     public string UnitId { get; private set; } = "";
     public ushort Product { get; private set; }
+    public List<ushort> ModelIds { get; } = new();
 
     // feature ids
     public const ushort Root = 0x0000, FeatureSet = 0x0001, DeviceInfo = 0x0003, DeviceName = 0x0005;
@@ -131,7 +132,11 @@ internal sealed class HidppDevice
             var ping = link.Request(index, 0x00, 1, new byte[] { 0, 0, 0x5A }, 400);
             if (ping[0] < 2) return null; // HID++ 1.0 (a receiver itself)
         }
-        catch (HidppException) { return null; }
+        catch (HidppException e)
+        {
+            if (Environment.GetEnvironmentVariable("GEARHUB_TRACE") == "1") Log.Write($"hid++ ping {index:X2} on {product:X4}: {e.Message}");
+            return null;
+        }
 
         var d = new HidppDevice(link, index) { Product = product };
         d.Features[Root] = 0;
@@ -165,6 +170,12 @@ internal sealed class HidppDevice
             {
                 var info = d.Call(DeviceInfo, 0);
                 d.UnitId = Convert.ToHexString(info, 1, 4).ToLowerInvariant();
+                // model ids after the transport: 4099 (wireless) and c095 (USB) on the G502 X PLUS
+                for (int i = 7; i + 1 < 13; i += 2)
+                {
+                    ushort m = (ushort)(info[i] << 8 | info[i + 1]);
+                    if (m != 0) d.ModelIds.Add(m);
+                }
             }
         }
         catch (HidppException e)

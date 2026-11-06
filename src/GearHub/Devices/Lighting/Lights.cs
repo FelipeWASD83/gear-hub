@@ -49,6 +49,13 @@ internal sealed class DynamicLights : Gear
         }
     }
 
+    /// <summary>True when Windows drives a lamp array of this USB product (enabled for Dynamic Lighting).</summary>
+    public bool Covers(ushort product) => _arrays.Any(a =>
+    {
+        try { return a.Lamps.HardwareProductId == product && a.Lamps.IsEnabled; }
+        catch (Exception) { return false; }
+    });
+
     public override void BuildPage(Page p)
     {
         p.Header(Name, Lang.T("Aparelhos de qualquer marca que aceitam a Iluminação Dinâmica do Windows. O Windows só deixa mudar a luz enquanto esta janela está na frente, a não ser que este app seja o controlador de fundo em Configurações > Personalização > Iluminação dinâmica.",

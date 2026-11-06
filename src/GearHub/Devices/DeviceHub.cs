@@ -64,8 +64,11 @@ internal sealed class DeviceHub : IDisposable
         _scanning = true;
         try
         {
-            Scan(force: false);
-            if (++_ticks % 5 == 0) PollAll();
+            bool every20s = ++_ticks % 5 == 0;
+            // a wireless mouse asleep answers "unknown device" behind its receiver and waking it changes no HID path:
+            // while a receiver has nobody, ask it again every 20 s
+            Scan(force: false, retryReceivers: every20s);
+            if (every20s) PollAll();
         }
         catch (Exception e) { Log.Error("hub tick", e); }
         finally { _scanning = false; }
@@ -81,12 +84,21 @@ internal sealed class DeviceHub : IDisposable
     }
 
     /// <summary>Rescans (force) or rescans only when the HID set or DSX changed.</summary>
-    public void Scan(bool force)
+    public void Scan(bool force, bool retryReceivers = false)
     {
         var hid = HidApi.Enumerate();
         string sig = string.Join("|", hid.Select(h => h.Path).OrderBy(p => p, StringComparer.Ordinal));
         bool dsx = VendorApps.Dsx;
-        if (!force && sig == _hidSignature && dsx == _dsxWas) return;
+        bool woke = false;
+        if (retryReceivers && !force && sig == _hidSignature)
+        {
+            HashSet<ushort> usedProducts;
+            lock (_gate) usedProducts = _gears.OfType<LogitechGear>().Select(l => l.Device.Product).ToHashSet();
+            var empty = hid.Where(h => h.Vendor == 0x046D && h.UsagePage == 0xFF00 && LogitechGear.Receivers.Contains(h.Product) && !usedProducts.Contains(h.Product)).ToList();
+            woke = empty.Count > 0 && LogitechGear.ReceiverHasDevice(empty);
+            if (woke) Log.Write("scan: a device answered behind a receiver");
+        }
+        if (!force && !woke && sig == _hidSignature && dsx == _dsxWas) return;
         bool first = _hidSignature == "";
         _hidSignature = sig;
         _dsxWas = dsx;
