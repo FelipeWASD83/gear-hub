@@ -1,0 +1,195 @@
+using System;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Threading;
+using GearHub.Devices;
+using GearHub.Profiles;
+using GearHub.Ui;
+using Forms = System.Windows.Forms;
+
+namespace GearHub;
+
+public partial class App : Application
+{
+    public static string Version { get; } = (Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "1.0.0").Split('+')[0];
+    internal static MainWindow? Window { get; private set; }
+    public static string LastForeground { get; private set; } = "";
+    private static Forms.NotifyIcon? _tray;
+    private static ForegroundWatcher? _foreground;
+    private static DispatcherTimer? _updateTimer;
+
+    [STAThread]
+    public static int Main(string[] args)
+    {
+        string first = args.Length > 0 ? args[0] : "";
+        if (first == Updater.ApplyArg && args.Length >= 3) return Updater.RunExecutor(args[1], int.TryParse(args[2], out int pid) ? pid : 0);
+        if (first == "--ping") return 0;
+        if (first is "--quit" or "--sair")
+        {
+            SingleInstance.SignalQuit();
+            for (int i = 0; i < 50 && SingleInstance.OtherRunning(); i++) Thread.Sleep(100);
+            return 0;
+        }
+        AppSettings.Load();
+        if (first == "--self-test") return SelfTest.Run(args.Length > 1 ? args[1] : null);
+        if (first == "--probe") return SelfTest.Probe(args.Length > 1 ? args[1] : null);
+
+        bool screenshot = first == "--screenshot";
+        if (!screenshot && !SingleInstance.Claim())
+        {
+            SingleInstance.SignalShow();
+            return 0;
+        }
+
+        ProfileStore.Load();
+        GearHub.Startup.Sync();
+        var app = new App();
+        app.InitializeComponent();
+        app.DispatcherUnhandledException += (_, e) => { Log.Error("ui", e.Exception); e.Handled = true; };
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Write("fatal: " + e.ExceptionObject);
+        TaskScheduler.UnobservedTaskException += (_, e) => { Log.Error("task", e.Exception); e.SetObserved(); };
+
+        if (screenshot) return app.Screenshot(args.Length > 1 ? args[1] : "screenshot.png", args.Length > 2 ? args[2] : "");
+
+        Log.Write($"start {Version} ({string.Join(' ', args)}) from {AppContext.BaseDirectory}");
+        if (first == Updater.AfterArg) Updater.MarkOpened();
+        DeviceHub.Instance.Start();
+        SingleInstance.Listen(() => app.Dispatcher.BeginInvoke(ShowWindow), () => app.Dispatcher.BeginInvoke(Quit));
+        app.Startup += (_, _) =>
+        {
+            CreateTray();
+            _foreground = new ForegroundWatcher();
+            _foreground.Changed += exe =>
+            {
+                LastForeground = exe;
+                ProfileStore.OnForeground(exe);
+            };
+            if (first != "--tray") ShowWindow();
+            ScheduleUpdates();
+        };
+        int code = app.Run();
+        _tray?.Dispose();
+        _foreground?.Dispose();
+        DeviceHub.Instance.Dispose();
+        SingleInstance.Release();
+        return code;
+    }
+
+    private int Screenshot(string path, string page)
+    {
+        int code = 1;
+        Startup += (_, _) =>
+        {
+            Task.Run(() => DeviceHub.Instance.Scan(force: true)).Wait();
+            // drawn off screen, without taking focus: the picture comes from the visual tree, not from the monitor
+            if (page != "") AppSettings.Current.LastPage = page;
+            var w = new MainWindow { WindowStartupLocation = WindowStartupLocation.Manual, Left = -20000, Top = 0, ShowActivated = false, ShowInTaskbar = false };
+            w.Show();
+            // let the page's background reads come back before drawing
+            var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+            t.Tick += (_, _) =>
+            {
+                t.Stop();
+                try { w.SaveScreenshot(path); code = 0; }
+                catch (Exception e) { Log.Error("screenshot", e); }
+                Shutdown();
+            };
+            t.Start();
+        };
+        Run();
+        DeviceHub.Instance.Dispose();
+        return code;
+    }
+
+    public static void ShowWindow()
+    {
+        if (Window == null)
+        {
+            Window = new MainWindow();
+            Window.Closed += (_, _) =>
+            {
+                Window = null;
+                // give back what the window used: the app lives in the tray with only the device threads.
+                // Aggressive collection decommits the GC's free regions; then the working set is trimmed.
+                var later = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                later.Tick += (_, _) =>
+                {
+                    later.Stop();
+                    if (Window != null) return;
+                    System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                    GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+                    TrimWorkingSet();
+                };
+                later.Start();
+            };
+            Window.Show();
+        }
+        if (Window.WindowState == WindowState.Minimized) Window.WindowState = WindowState.Normal;
+        Window.Activate();
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool SetProcessWorkingSetSize(IntPtr process, IntPtr min, IntPtr max);
+
+    private static void TrimWorkingSet()
+    {
+        try { SetProcessWorkingSetSize(System.Diagnostics.Process.GetCurrentProcess().Handle, new IntPtr(-1), new IntPtr(-1)); }
+        catch (Exception) { }
+    }
+
+    public static void Quit()
+    {
+        Window?.Close();
+        Current.Shutdown();
+    }
+
+    private static void CreateTray()
+    {
+        var icon = new System.Drawing.Icon(GetResourceStream(new Uri("pack://application:,,,/Assets/icone.ico")).Stream);
+        _tray = new Forms.NotifyIcon { Icon = icon, Text = Lang.T("Central de Periféricos", "Gear Hub"), Visible = true };
+        _tray.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) ShowWindow(); };
+        var menu = new Forms.ContextMenuStrip();
+        menu.Opening += (_, _) =>
+        {
+            menu.Items.Clear();
+            menu.Items.Add(Lang.T("Abrir", "Open"), null, (_, _) => ShowWindow());
+            var profiles = new Forms.ToolStripMenuItem(Lang.T("Perfil", "Profile"));
+            foreach (var p in ProfileStore.All)
+            {
+                var pr = p;
+                var item = new Forms.ToolStripMenuItem(ProfileStore.Display(pr)) { Checked = pr.Name == ProfileStore.Active, Enabled = pr.Devices.Count > 0 };
+                item.Click += (_, _) => _ = ProfileStore.Apply(pr, "tray");
+                profiles.DropDownItems.Add(item);
+            }
+            menu.Items.Add(profiles);
+            menu.Items.Add(new Forms.ToolStripSeparator());
+            menu.Items.Add(Lang.T("Sair", "Quit"), null, (_, _) => Quit());
+        };
+        menu.Items.Add("...");
+        _tray.ContextMenuStrip = menu;
+    }
+
+    private static void ScheduleUpdates()
+    {
+        void Check()
+        {
+            if (!AppSettings.Current.CheckUpdates) return;
+            Task.Run(() =>
+            {
+                var r = Updater.Check(false);
+                if (r is { IsNewer: true })
+                    Current.Dispatcher.BeginInvoke(() => _tray?.ShowBalloonTip(6000, Lang.T("Central de Periféricos", "Gear Hub"), Updater.LastText, Forms.ToolTipIcon.Info));
+            });
+        }
+        _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(24) };
+        _updateTimer.Tick += (_, _) => Check();
+        _updateTimer.Start();
+        var once = new DispatcherTimer { Interval = TimeSpan.FromMinutes(2) };
+        once.Tick += (_, _) => { once.Stop(); Check(); };
+        once.Start();
+    }
+}

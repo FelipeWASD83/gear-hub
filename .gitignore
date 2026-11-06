@@ -1,0 +1,9 @@
+bin/
+obj/
+*.user
+.vs/
+# written by ferramentas\compilar.ps1 every time Smart App Control blocks a build
+src/GearHub/Stamp.g.cs
+# release packages are built on demand (publicar-versao.ps1), never kept here
+*.zip
+dist/
