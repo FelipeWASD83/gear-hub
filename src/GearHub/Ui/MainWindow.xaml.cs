@@ -48,10 +48,10 @@ public partial class MainWindow : Window
         _selected = AppSettings.Current.LastPage;
         BuildNav();
         IdleIsland(animate: false);
-        Select(_selected != "" ? _selected : hub.Gears.FirstOrDefault()?.Key ?? "profiles");
+        Select(_selected != "" ? _selected : "home");
     }
 
-    private void OnListChanged() => Dispatcher.BeginInvoke(() => { BuildNav(); IdleIsland(); if (_page == null || (_selected is not "profiles" and not "settings" && DeviceHub.Instance.ByKey(_selected) == null)) Select(_selected); });
+    private void OnListChanged() => Dispatcher.BeginInvoke(() => { BuildNav(); IdleIsland(); if (_page == null || _selected == "home" || (!Special(_selected) && DeviceHub.Instance.ByKey(_selected) == null)) Select(_selected); });
     private void OnGearChanged(Gear g) => Dispatcher.BeginInvoke(BuildNav);
     private void OnProfilesChanged() => Dispatcher.BeginInvoke(() => { IdleIsland(); });
 
@@ -60,10 +60,12 @@ public partial class MainWindow : Window
         Nav.Children.Clear();
         NavBottom.Children.Clear();
         var gears = DeviceHub.Instance.Gears;
+        Nav.Children.Add(NavItem("home", Icons.Home, Lang.T("Visão geral", "Overview"), Lang.T("Todos os aparelhos", "Every device")));
         if (gears.Count == 0)
             Nav.Children.Add(new TextBlock { Text = Lang.T("Procurando aparelhos...", "Looking for devices..."), Style = Page.S("Small"), Margin = new Thickness(12, 6, 0, 0) });
         foreach (var g in gears)
             Nav.Children.Add(NavItem(g.Key, Icons.For(g.Kind), g.Name, g.Status != "" ? g.Status : g.Brand));
+        NavBottom.Children.Add(NavItem("lights", Icons.For(GearKind.Light), Lang.T("Luzes", "Lights"), Lang.T("Um efeito para tudo", "One effect for everything")));
         NavBottom.Children.Add(NavItem("profiles", Icons.Profiles, Lang.T("Perfis", "Profiles"), ProfileStore.Display(ProfileStore.All.FirstOrDefault(p => p.Name == ProfileStore.Active) ?? ProfileStore.Default)));
         NavBottom.Children.Add(NavItem("settings", Icons.Settings, Lang.T("Ajustes", "Settings"), Lang.T("Iniciar com o Windows, idioma, atualização", "Start with Windows, language, updates")));
     }
@@ -88,18 +90,16 @@ public partial class MainWindow : Window
     {
         if (_page != null) _page.Closed = true;
         _page = new Page(Say);
-        Gear? gear = key is "profiles" or "settings" ? null : DeviceHub.Instance.ByKey(key);
-        if (gear == null && key is not "profiles" and not "settings")
-        {
-            gear = DeviceHub.Instance.Gears.FirstOrDefault();
-            key = gear?.Key ?? "profiles";
-        }
+        Gear? gear = Special(key) ? null : DeviceHub.Instance.ByKey(key);
+        if (gear == null && !Special(key)) key = "home";
         _selected = key;
         AppSettings.Current.LastPage = key;
         AppSettings.Save();
         try
         {
-            if (key == "profiles") ProfilesPage.Build(_page);
+            if (key == "home") HomePage.Build(_page);
+            else if (key == "lights") LightsPage.Build(_page);
+            else if (key == "profiles") ProfilesPage.Build(_page);
             else if (key == "settings") SettingsPage.Build(_page);
             else gear!.BuildPage(_page);
         }
@@ -113,6 +113,8 @@ public partial class MainWindow : Window
         foreach (var r in Nav.Children.OfType<RadioButton>().Concat(NavBottom.Children.OfType<RadioButton>()))
             r.IsChecked = (string)r.Tag == key;
     }
+
+    private static bool Special(string key) => key is "home" or "lights" or "profiles" or "settings";
 
     /// <summary>The pill at rest: how many devices and which profile.</summary>
     private void IdleIsland(bool animate = true)
@@ -145,6 +147,8 @@ public partial class MainWindow : Window
         e.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         return e.DesiredSize.Width;
     }
+
+    public void ScrollPage(double offset) => PageScroll.ScrollToVerticalOffset(offset);
 
     /// <summary>Renders the window to a PNG (the --screenshot option, to check the layout without looking).</summary>
     public void SaveScreenshot(string path)

@@ -53,7 +53,7 @@ internal sealed class DeviceHub : IDisposable
         Task.Run(() =>
         {
             Scan(force: true);
-            if (ByKey("corsair-dram") is CorsairRam ram) ram.Restore();
+            GearHub.Lighting.LightEngine.Instance.Restore();
             _timer.Change(4000, 4000);
         });
     }
@@ -165,6 +165,7 @@ internal sealed class DeviceHub : IDisposable
             foreach (var gone in _gears.Where(g => !found.Contains(g)))
             {
                 gone.Changed -= OnGearChanged;
+                GearHub.Lighting.LightEngine.Instance.Drop(gone.Key);
                 gone.Dispose();
             }
             foreach (var g in found.Where(g => !_gears.Contains(g))) g.Changed += OnGearChanged;
@@ -173,6 +174,8 @@ internal sealed class DeviceHub : IDisposable
         }
         if (first || force) PollAll();
         ListChanged?.Invoke();
+        // a device that came back takes its light effect again
+        if (!first) GearHub.Lighting.LightEngine.Instance.Restore();
     }
 
     private static bool SameInterface(string a, string b)

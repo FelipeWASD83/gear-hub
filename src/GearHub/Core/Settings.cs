@@ -13,7 +13,14 @@ internal sealed class AppSettings
     [JsonPropertyName("autoProfiles")] public bool AutoProfiles { get; set; } = true;
     [JsonPropertyName("checkUpdates")] public bool CheckUpdates { get; set; } = true;
     [JsonPropertyName("lastPage")] public string LastPage { get; set; } = "";
+    /// <summary>1.0.0 kept the RAM choice here ("mode:#hex"); read once into Lights.</summary>
     [JsonPropertyName("ramColor")] public string RamColor { get; set; } = "";
+    /// <summary>The software light effect each device runs, by device key.</summary>
+    [JsonPropertyName("lights")] public System.Collections.Generic.Dictionary<string, Lighting.EffectSpec> Lights { get; set; } = new();
+    /// <summary>Global hotkeys: "Ctrl+Alt+P" style, empty = off.</summary>
+    [JsonPropertyName("hotkeyProfile")] public string HotkeyProfile { get; set; } = "";
+    [JsonPropertyName("hotkeySnapTap")] public string HotkeySnapTap { get; set; } = "";
+    [JsonPropertyName("hotkeyWindow")] public string HotkeyWindow { get; set; } = "";
 
     public static AppSettings Current { get; private set; } = new();
 
@@ -32,6 +39,18 @@ internal sealed class AppSettings
             Current = new AppSettings();
         }
         Lang.Apply(Current.Language);
+        // 1.0.0 → 1.1.0: the RAM's "fixed:#hex" / "breathing:#hex" / "rainbow:#hex" becomes a light effect
+        if (Current.RamColor != "" && !Current.Lights.ContainsKey("corsair-dram"))
+        {
+            var parts = Current.RamColor.Split(':');
+            Current.Lights["corsair-dram"] = new Lighting.EffectSpec
+            {
+                Effect = parts[0] switch { "breathing" => Lighting.Effects.Breathing, "rainbow" => Lighting.Effects.Rainbow, _ => Lighting.Effects.Static },
+                A = parts.Length > 1 ? parts[1] : "#FFFFFF",
+            };
+            Current.RamColor = "";
+            Save();
+        }
     }
 
     public static void Save()

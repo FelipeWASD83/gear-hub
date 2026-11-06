@@ -131,6 +131,8 @@ internal sealed class DualSense : Gear
         if (status < 0) return;
         int level = Math.Min(100, (status & 0x0F) * 10 + 5);
         int state = (status & 0xF0) >> 4;
+        Battery = state == 2 ? 100 : level;
+        Charging = state == 1;
         string s = state == 2 ? Lang.T("carregado", "full") : $"{level}%" + (state == 1 ? Lang.T(" carregando", " charging") : "");
         if (s != Status) { Status = s; RaiseChanged(); }
     }

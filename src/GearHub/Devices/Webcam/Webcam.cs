@@ -138,6 +138,34 @@ internal sealed class Webcam : Gear
     {
         p.Header(_name, Lang.T("Ajustes da própria câmera (valem em qualquer programa que usar ela). A luz da câmera não acende.",
             "The camera's own settings (they apply in every app that uses it). The camera light does not turn on."));
+        // live picture, only on request (the camera light turns on while it shows)
+        var view = p.Section(Lang.T("Imagem", "Picture"), Lang.T("A luz da câmera acende enquanto a imagem estiver ligada. Sair da página desliga.",
+            "The camera light is on while the picture shows. Leaving the page turns it off."));
+        var image = new System.Windows.Controls.Image { Width = 640, Stretch = System.Windows.Media.Stretch.Uniform, HorizontalAlignment = System.Windows.HorizontalAlignment.Left, Visibility = System.Windows.Visibility.Collapsed };
+        var frame = new System.Windows.Controls.Border { CornerRadius = new System.Windows.CornerRadius(18), ClipToBounds = true, Child = image, HorizontalAlignment = System.Windows.HorizontalAlignment.Left, Margin = new System.Windows.Thickness(0, 8, 0, 4) };
+        CameraPreview? preview = null;
+        void StopPreview()
+        {
+            preview?.Dispose();
+            preview = null;
+            image.Source = null;
+            image.Visibility = System.Windows.Visibility.Collapsed;
+        }
+        p.OnClose += StopPreview;
+        p.Row(view, Lang.T("Mostrar a imagem", "Show the picture"), null, p.Toggle(false, on =>
+        {
+            if (!on) { StopPreview(); return; }
+            preview = new CameraPreview(image);
+            image.Visibility = System.Windows.Visibility.Visible;
+            var pv = preview;
+            p.Work(() => pv.StartAsync(_name).GetAwaiter().GetResult(), ok =>
+            {
+                if (!ok) { p.Say(pv.Problem ?? Lang.T("A câmera não abriu", "The camera did not open"), false); StopPreview(); }
+                else if (pv.Shared) p.Say(Lang.T("Outro programa está com a câmera: imagem só para ver", "Another app holds the camera: view only"));
+            });
+        }));
+        view.Children.Add(frame);
+
         var loading = p.Note(p.Root, Lang.T("Lendo a câmera...", "Reading the camera..."));
         string fail = Lang.T("A câmera não aceitou", "The camera did not take it");
         p.Work(Read, props =>

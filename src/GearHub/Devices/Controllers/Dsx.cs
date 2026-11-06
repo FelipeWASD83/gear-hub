@@ -155,6 +155,7 @@ internal sealed class DsxGear : Gear
     {
         var pads = Send((DsxApi.GetStatus, Array.Empty<int>()));
         if (pads != null) _pads = pads;
+        Battery = _pads.FirstOrDefault(d => d.Battery >= 0)?.Battery;
         string s = pads == null ? Lang.T("sem resposta", "no answer")
             : pads.Count == 0 ? Lang.T("nenhum controle", "no controller")
             : string.Join(", ", pads.Select(d => d.Name + (d.Battery >= 0 ? $" {d.Battery}%" : "")));

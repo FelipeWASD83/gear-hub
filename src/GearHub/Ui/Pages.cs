@@ -126,6 +126,29 @@ internal static class SettingsPage
                 p.Say(Lang.T("Idioma trocado", "Language changed"));
             }));
 
+        var keys = p.Section(Lang.T("Atalhos de teclado", "Keyboard shortcuts"), Lang.T("Valem em qualquer lugar, até dentro do jogo (pela API normal do Windows, nada mexe no jogo). Clique na caixa e aperte a combinação; Delete apaga.",
+            "They work anywhere, even in a game (the plain Windows API, nothing touches the game). Click the box and press the combination; Delete clears it."));
+        void HotkeyRow(string label, Func<string> get, Action<string> set)
+        {
+            var box = new TextBox { Width = 200, Text = get(), IsReadOnly = true, Cursor = Cursors.Hand, ToolTip = Lang.T("Aperte a combinação", "Press the combination") };
+            box.PreviewKeyDown += (_, e) =>
+            {
+                e.Handled = true;
+                var key = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (key is Key.Delete or Key.Back) { set(""); box.Text = ""; Hotkeys.Apply(); p.Say(Lang.T("Atalho apagado", "Shortcut cleared")); return; }
+                string? text = Hotkeys.Describe(key, Keyboard.Modifiers);
+                if (text == null) return;
+                set(text);
+                box.Text = text;
+                var failed = Hotkeys.Apply();
+                p.Say(failed.Contains(text) ? Lang.T("Outro programa já usa ", "Another app already uses ") + text : Lang.T("Atalho: ", "Shortcut: ") + text, !failed.Contains(text));
+            };
+            p.Row(keys, label, null, box);
+        }
+        HotkeyRow(Lang.T("Próximo perfil", "Next profile"), () => AppSettings.Current.HotkeyProfile, v => { AppSettings.Current.HotkeyProfile = v; AppSettings.Save(); });
+        HotkeyRow(Lang.T("Ligar/desligar o Snap Tap", "Snap Tap on/off"), () => AppSettings.Current.HotkeySnapTap, v => { AppSettings.Current.HotkeySnapTap = v; AppSettings.Save(); });
+        HotkeyRow(Lang.T("Abrir esta janela", "Open this window"), () => AppSettings.Current.HotkeyWindow, v => { AppSettings.Current.HotkeyWindow = v; AppSettings.Save(); });
+
         var up = p.Section(Lang.T("Atualização", "Updates"), Lang.T("Pelas releases do GitHub (FelipeWASD83/gear-hub), com o SHA-256 conferido e volta sozinha se a versão nova não abrir.",
             "From the GitHub releases (FelipeWASD83/gear-hub), SHA-256 checked, and it rolls back if the new version does not open."));
         p.Row(up, Lang.T("Procurar sozinho", "Check by itself"), Lang.T("Uma vez por dia, só avisa.", "Once a day, it only tells you."),

@@ -56,6 +56,53 @@ internal static class RazerProtocol
     public static readonly Cmd GetBrightness = new(3, 0x0F, 0x84);
     public static readonly Cmd SetBrightness = new(3, 0x0F, 0x04);
 
+    // Chroma effect: [profile, region, effect, flags, rate, colour count, r,g,b...], size 6 + 3 per colour
+    public static readonly Cmd GetChromaEffect = new(80, 0x0F, 0x82);
+    public static readonly Cmd SetChromaEffect = new(80, 0x0F, 0x02);
+    public static readonly Cmd GetAnalogAdc = new(4, 0x02, 0x9C);
+
+    /// <summary>
+    /// The effects of Synapse's EFX table this keyboard accepts (tried on 06/11/2026: fire 9 and wheel 12 answer
+    /// status 3). Wave speed is a delay (40 = normal, smaller is faster); reactive, ripple and starlight take 1..3.
+    /// </summary>
+    public static readonly (byte Id, string Pt, string En, int Colors, bool Speed)[] ChromaEffects =
+    {
+        (0, "Apagado", "Off", 0, false),
+        (1, "Fixo", "Static", 1, false),
+        (2, "Respiração", "Breathing", 2, false),
+        (3, "Espectro", "Spectrum", 0, false),
+        (4, "Onda", "Wave", 0, true),
+        (5, "Reativo", "Reactive", 1, true),
+        (6, "Ondulação", "Ripple", 1, true),
+        (7, "Estrelas", "Starlight", 2, true),
+    };
+
+    /// <summary>The rate byte for an effect at a speed (1 = normal).</summary>
+    public static byte ChromaRate(byte effect, double speed) => effect switch
+    {
+        4 => (byte)Math.Clamp(Math.Round(40 / Math.Max(0.25, speed)), 1, 255),
+        5 or 6 or 7 => (byte)Math.Clamp(Math.Round(speed * 2 / 1.5 + 0.34), 1, 3),
+        _ => 0,
+    };
+
+    public static byte[] ChromaArgs(byte effect, byte flags, byte rate, IReadOnlyList<(byte R, byte G, byte B)> colors)
+    {
+        var a = new byte[6 + 3 * colors.Count];
+        a[0] = LiveSlot;
+        a[1] = 0;
+        a[2] = effect;
+        a[3] = flags;
+        a[4] = rate;
+        a[5] = (byte)colors.Count;
+        for (int i = 0; i < colors.Count; i++)
+        {
+            a[6 + 3 * i] = colors[i].R;
+            a[7 + 3 * i] = colors[i].G;
+            a[8 + 3 * i] = colors[i].B;
+        }
+        return a;
+    }
+
     /// <summary>Synapse writes the active profile to slot 1 (the live one).</summary>
     public const byte LiveSlot = 1;
     public const int ActuationPerCall = 15, RapidPerCall = 13;

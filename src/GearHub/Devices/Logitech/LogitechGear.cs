@@ -18,8 +18,52 @@ namespace GearHub.Devices.Logitech;
 /// libratbag. With G HUB open, DPI, sidetone and onboard mode go through G HUB's agent instead, because G HUB
 /// re-applies its own values on every profile event.
 /// </summary>
-internal sealed class LogitechGear : Gear
+internal sealed class LogitechGear : Gear, GearHub.Lighting.ILightTarget
 {
+    // ---- light target: each zone is one "LED", painted as a fixed colour 15 times a second ----
+    private List<Zone>? _lightZones;
+
+    public bool LightsAvailable => _d.Has(HidppDevice.RgbEffects) || _d.Has(HidppDevice.ColorLedEffects);
+    public int MaxFps => 15;
+
+    public string? Begin()
+    {
+        try { _lightZones = ReadZones().Where(z => z.Effects.Contains(EffectFixed)).ToList(); }
+        catch (HidppException e) { return e.Message; }
+        return _lightZones.Count == 0 ? Lang.T("Sem zona de luz com cor fixa.", "No light zone takes a fixed colour.") : null;
+    }
+
+    public double[] LedPositions()
+    {
+        int n = _lightZones?.Count ?? 1;
+        return Enumerable.Range(0, n).Select(i => n <= 1 ? 0.5 : i / (double)(n - 1)).ToArray();
+    }
+
+    private Color[]? _lastPainted;
+
+    public void Paint(Color[] colors)
+    {
+        if (_lightZones == null) return;
+        for (int i = 0; i < _lightZones.Count && i < colors.Length; i++)
+        {
+            if (_lastPainted != null && i < _lastPainted.Length && _lastPainted[i] == colors[i]) continue;
+            WriteEffect(_lightZones[i], EffectFixed, colors[i]);
+        }
+        _lastPainted = colors;
+    }
+
+    /// <summary>Back to a slow colour cycle (G HUB puts its own back on its next profile event).</summary>
+    public void End()
+    {
+        if (_lightZones == null) return;
+        try
+        {
+            foreach (var z in _lightZones.Where(z => z.Effects.Contains(EffectCycle))) WriteEffect(z, EffectCycle, Colors.Black, 5000);
+        }
+        catch (HidppException) { }
+        _lastPainted = null;
+    }
+
     private readonly HidppDevice _d;
     private readonly ushort _product;
 
@@ -141,6 +185,7 @@ internal sealed class LogitechGear : Gear
     public bool WriteDpi(int dpi)
     {
         _d.Call(HidppDevice.AdjustableDpi, 3, 0, (byte)(dpi >> 8), (byte)dpi);
+        Signals.RaiseDpi(this, dpi);
         return true;
     }
 
@@ -333,7 +378,8 @@ internal sealed class LogitechGear : Gear
     public override void Poll()
     {
         var b = _d.ReadBattery();
-        string s = b is { } v ? $"{(v.Estimated ? "~" : "")}{v.Percent}%" + (v.Charging ? Lang.T(" carregando", " charging") : "") : "";
+        if (b is { } bb) { Battery = bb.Percent; Charging = bb.Charging; }
+        string s = b is { } v ?$"{(v.Estimated ? "~" : "")}{v.Percent}%" + (v.Charging ? Lang.T(" carregando", " charging") : "") : "";
         if (s != Status) { Status = s; RaiseChanged(); }
     }
 
@@ -438,6 +484,21 @@ internal sealed class LogitechGear : Gear
                     p.Work(() => WriteRate(ms), () => p.Say(Lang.T("Taxa em ", "Rate at ") + $"{1000 / ms} Hz"), fail);
                 }));
             }
+            if (Kind == GearKind.Mouse)
+            {
+                var result = new TextBlock { Text = "", Foreground = Page.B("Ink2"), FontSize = 14, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+                var measure = p.Button(Lang.T("Medir (3 s)", "Measure (3 s)"), () =>
+                {
+                    if (App.Window == null) return;
+                    result.Text = Lang.T("mexa o mouse em círculos...", "move the mouse in circles...");
+                    Ui.MouseRate.Measure(App.Window, hz =>
+                    {
+                        result.Text = hz is int v ? $"{v} Hz" : Lang.T("mexeu pouco, tente de novo", "too little movement, try again");
+                        if (hz is int v2) p.Say(Lang.T("Taxa real: ", "Real rate: ") + $"{v2} Hz");
+                    });
+                });
+                p.Row(sec, Lang.T("Taxa real", "Real rate"), Lang.T("Conta os relatórios que chegam enquanto você mexe o mouse.", "Counts the reports that arrive while you move the mouse."), p.Line(result, measure));
+            }
             if (s.Onboard is bool onboard)
                 p.Row(sec, Lang.T("Usar a memória do mouse", "Use the mouse's memory"),
                     Lang.T("Ligado, o mouse segue o perfil gravado nele (sem programa nenhum). Desligado, quem manda é o programa.",
@@ -447,22 +508,13 @@ internal sealed class LogitechGear : Gear
 
         if (s.Zones.Count > 0)
         {
-            var sec = p.Section(Lang.T("Luz", "Lighting"), VendorApps.GHub ? Lang.T("Se o G HUB trocar de perfil, ele pode pôr a luz dele de volta.",
-                "If G HUB switches profile, it may put its own light back.") : null);
+            string hint = Lang.T("Os efeitos animados são desenhados pelo Gear Hub, uma cor por zona. \"Do aparelho\" devolve o ciclo de cores dele.",
+                "Animated effects are drawn by Gear Hub, one colour per zone. \"Device's own\" puts its colour cycle back.");
+            if (VendorApps.GHub) hint += " " + Lang.T("Se o G HUB trocar de perfil, ele pode pôr a luz dele de volta.", "If G HUB switches profile, it may put its own light back.");
             if (s.LampArray)
-                p.Note(sec, Lang.T("A Iluminação Dinâmica do Windows está mandando na luz deste aparelho e regrava a cor o tempo todo, então o que for escolhido aqui não aparece. Para o Gear Hub mandar, desligue o aparelho em Configurações > Personalização > Iluminação dinâmica (ou mude a cor na página Iluminação Dinâmica, com esta janela na frente).",
+                p.Note(p.Root, Lang.T("A Iluminação Dinâmica do Windows está mandando na luz deste aparelho e regrava a cor o tempo todo, então o que for escolhido aqui não aparece. Para o Gear Hub mandar, desligue o aparelho em Configurações > Personalização > Iluminação dinâmica (ou mude a cor na página Iluminação Dinâmica, com esta janela na frente).",
                     "Windows Dynamic Lighting is driving this device's light and keeps writing over it, so what you pick here will not show. To drive it from Gear Hub, turn the device off in Settings > Personalization > Dynamic Lighting (or change the colour on the Dynamic Lighting page, with this window in front)."), true);
-            foreach (var z in s.Zones)
-            {
-                var zone = z;
-                int effect = zone.Effects.Contains(EffectFixed) ? EffectFixed : zone.Effects.FirstOrDefault();
-                Color color = Colors.White;
-                void Send() => p.Work(() => WriteEffect(zone, effect, color), () => p.Say(ZoneName(zone, s.Zones.Count) + ": " + EffectName(effect)), fail);
-                var offered = zone.Effects.Where(e => e is EffectOff or EffectFixed or EffectBreathing or EffectCycle).ToList();
-                // the current effect cannot be read back, so nothing starts selected
-                p.Row(sec, ZoneName(zone, s.Zones.Count), null, p.Segments(offered.Select(EffectName).ToList(), -1, i => { effect = offered[i]; Send(); }));
-                p.Row(sec, Lang.T("Cor", "Colour"), null, p.ColorPick(color, c => { color = c; if (effect is EffectOff or EffectCycle) effect = EffectFixed; Send(); }));
-            }
+            Ui.EffectsPanel.Build(p, new GearHub.Lighting.ILightTarget[] { this }, hint, title: Lang.T("Luz", "Lighting"));
         }
 
         if (s.Sidetone >= 0 || s.Eq != null)

@@ -77,6 +77,19 @@ internal static class SelfTest
         var dsx = JsonNode.Parse(DsxApi.Packet((DsxApi.RgbUpdate, new[] { 0, 255, 0, 0 })))!;
         Check("dsx: pacote", dsx["instructions"]![0]!["type"]!.GetValue<int>() == 2 && dsx["instructions"]![0]!["parameters"]!.AsArray().Count == 4);
 
+        // 1.1.0: Chroma packet, effects, hotkeys, the local channel
+        Check("razer: pacote de efeito", RazerProtocol.ChromaArgs(2, 2, 0, new[] { ((byte)1, (byte)2, (byte)3), ((byte)4, (byte)5, (byte)6) }).SequenceEqual(new byte[] { 1, 0, 2, 2, 0, 2, 1, 2, 3, 4, 5, 6 }));
+        var r = new Lighting.Effects.Renderer(Enumerable.Range(0, 20).Select(i => i / 19.0).ToArray());
+        var rain = r.Frame(new Lighting.EffectSpec { Effect = Lighting.Effects.Rainbow }, 1.0, null);
+        Check("efeitos: arco-íris muda pela posição", rain.Distinct().Count() > 10);
+        var breathMin = Enumerable.Range(0, 100).Select(i => r.Frame(new Lighting.EffectSpec { Effect = Lighting.Effects.Breathing, A = "#FF0000", B = "#FF0000" }, i * 0.05, null)[0].R).Min();
+        Check($"efeitos: respiração nunca apaga (mínimo {breathMin} de 255)", breathMin >= 80);
+        var half = r.Frame(new Lighting.EffectSpec { Effect = Lighting.Effects.Static, A = "#FFFFFF", Brightness = 0.5 }, 0, null)[0];
+        Check("efeitos: brilho 50%", half.R is >= 126 and <= 128);
+        Check("atalhos: Ctrl+Alt+P", Hotkeys.TryParse("Ctrl+Alt+P", out uint mods, out uint vk) && mods == 3 && vk == 0x50);
+        Check("atalhos: tecla sem modificador recusada", !Hotkeys.TryParse("P", out _, out _));
+        Check("canal: hello e pedido", ChannelRoundTrip());
+
         // updater version compare
         Check("atualizador: versões", Updater.Compare("1.0.10", "1.0.9") > 0 && Updater.Compare("v2.0.0", "1.9.9") > 0 && Updater.Compare("1.0.0", "1.0.0") == 0);
 
@@ -122,6 +135,32 @@ internal static class SelfTest
                     var after = razer.ReadRapid(new byte[] { 18 }).Single();
                     Line($"lido de volta: {(after.Enabled ? "ligado" : "desligado")} {after.DownMm} mm -> {(after == test ? "OK" : "DIFERENTE")}");
                     Line($"devolveu: {razer.WriteRapid(new[] { before })}, agora {(razer.ReadRapid(new byte[] { 18 }).Single() == before ? "igual ao antes" : "DIFERENTE")}");
+                    break;
+                }
+                case "depth" when razer != null:
+                {
+                    // announced: keys released for 3 s, then hold W all the way down, then halfway, then let go
+                    for (int i = 0; i < 100; i++)
+                    {
+                        var w = razer.ReadDepth(18);
+                        var a = razer.ReadDepth(31);
+                        if (i % 5 == 0) Line($"{i / 10.0:0.0} s  W={w}  A={a}");
+                        System.Threading.Thread.Sleep(100);
+                    }
+                    break;
+                }
+                case "chroma" when razer != null:
+                {
+                    var before = razer.ReadChroma();
+                    Line($"antes: efeito {before?.Effect}");
+                    foreach (var (id, name) in new[] { ((byte)4, "onda"), ((byte)7, "estrelas"), ((byte)5, "reativo") })
+                    {
+                        byte rate = RazerProtocol.ChromaRate(id, 1);
+                        var colors = id == 7 ? new[] { System.Windows.Media.Colors.Cyan, System.Windows.Media.Colors.Magenta } : Array.Empty<System.Windows.Media.Color>();
+                        Line($"{DateTime.Now:HH:mm:ss} {name}: {razer.WriteChroma(id, (byte)(id == 4 ? 1 : 0), rate, colors)}; lido: {razer.ReadChroma()?.Effect}");
+                        System.Threading.Thread.Sleep(5000);
+                    }
+                    if (before is { } b) Line($"devolveu {b.Effect}: {razer.WriteChroma(b.Effect, b.Flags, b.Rate, b.Colors)}");
                     break;
                 }
                 case "razer-polling" when razer != null:
@@ -250,21 +289,29 @@ internal static class SelfTest
                         System.Threading.Thread.Sleep(7000);
                         Line($"{DateTime.Now:HH:mm:ss} RAM ff0000ff: {ram.PaintRaw("ff0000ff") ?? "aceito"}");
                         System.Threading.Thread.Sleep(7000);
-                        ram.Set(CorsairRam.Release, System.Windows.Media.Colors.White, save: false);
+                        ram.End();
                         Line($"{DateTime.Now:HH:mm:ss} RAM solta");
                     }
                     break;
                 }
                 case "ram":
+                case "fx":
                 {
-                    var ram = hub.Gears.OfType<CorsairRam>().FirstOrDefault();
-                    if (ram == null) { Line("sem o serviço da Corsair"); break; }
-                    Line($"iCUE aberto: {VendorApps.Icue}");
-                    string? err = ram.Set(CorsairRam.Fixed, System.Windows.Media.Color.FromRgb(255, 0, 0), save: false);
-                    Line(err ?? "vermelho fixo aceito pelo serviço");
-                    System.Threading.Thread.Sleep(4000);
-                    ram.Set(CorsairRam.Release, System.Windows.Media.Colors.White, save: false);
-                    Line("soltou: os pentes voltam ao efeito deles");
+                    // the animated effects through the engine, announced to him: rainbow 8 s, comet 8 s, fire 8 s, then let go
+                    var targets = Lighting.LightEngine.Targets().Where(t => step == "fx" || t is CorsairRam).ToList();
+                    Line($"alvos: {string.Join(", ", targets.Select(t => t.Name))}");
+                    var proc = System.Diagnostics.Process.GetCurrentProcess();
+                    foreach (var fx in new[] { Lighting.Effects.Rainbow, Lighting.Effects.Comet, Lighting.Effects.Fire })
+                    {
+                        var spec = new Lighting.EffectSpec { Effect = fx, A = "#00C7BE", B = "#5856D6" };
+                        foreach (var t in targets) Line($"{DateTime.Now:HH:mm:ss} {t.Name} {fx}: {Lighting.LightEngine.Instance.Set(t, spec, save: false, announce: false) ?? "ok"}");
+                        var cpu0 = proc.TotalProcessorTime;
+                        System.Threading.Thread.Sleep(8000);
+                        proc.Refresh();
+                        Line($"   CPU do processo em 8 s: {(proc.TotalProcessorTime - cpu0).TotalMilliseconds / 8000.0 / Environment.ProcessorCount * 100:0.00}% da máquina");
+                    }
+                    foreach (var t in targets) Lighting.LightEngine.Instance.Set(t, new Lighting.EffectSpec { Effect = Lighting.Effects.Off }, save: false, announce: false);
+                    Line($"{DateTime.Now:HH:mm:ss} soltou (o efeito salvo de cada um volta quando o Gear Hub abrir)");
                     break;
                 }
                 case "webcam":
@@ -286,6 +333,76 @@ internal static class SelfTest
         Finish(file);
         hub.Dispose();
         return 0;
+    }
+
+    /// <summary>--listen &lt;commands file&gt; &lt;seconds between&gt; &lt;out&gt;: a client of the running Gear Hub's channel.</summary>
+    public static int Listen(string commandsFile, double gap, string? file)
+    {
+        try
+        {
+            using var client = new System.IO.Pipes.NamedPipeClientStream(".", EventChannel.PipeName, System.IO.Pipes.PipeDirection.InOut, System.IO.Pipes.PipeOptions.Asynchronous);
+            client.Connect(3000);
+            var reader = new System.IO.StreamReader(client);
+            var writer = new System.IO.StreamWriter(client) { AutoFlush = true, NewLine = "\n" };
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var readTask = System.Threading.Tasks.Task.Run(async () =>
+            {
+                while (true)
+                {
+                    string? line = await reader.ReadLineAsync();
+                    if (line == null) return;
+                    lock (Out) Out.AppendLine($"{clock.Elapsed.TotalSeconds:0.0} <- {line[..Math.Min(200, line.Length)]}");
+                }
+            });
+            System.Threading.Thread.Sleep(500);
+            foreach (var cmd in File.ReadAllLines(commandsFile).Where(l => l.Trim() != ""))
+            {
+                lock (Out) Out.AppendLine($"{clock.Elapsed.TotalSeconds:0.0} -> {cmd}");
+                writer.WriteLine(cmd);
+                System.Threading.Thread.Sleep(TimeSpan.FromSeconds(gap));
+            }
+        }
+        catch (Exception e) { Out.AppendLine("erro: " + e.Message); }
+        Finish(file);
+        return 0;
+    }
+
+    /// <summary>Starts the real pipe server, connects as a client, reads the hello, sends a command and sees it arrive.</summary>
+    private static bool ChannelRoundTrip()
+    {
+        if (System.IO.Directory.GetFiles(@"\\.\pipe\").Any(p => p.EndsWith(EventChannel.PipeName, StringComparison.OrdinalIgnoreCase)))
+        {
+            Out.AppendLine("      (o Gear Hub está aberto e já tem o pipe: o teste do canal fala com ele)");
+        }
+        EventChannel.Hello = () => new JsonObject { ["type"] = "hello", ["version"] = "test" };
+        JsonObject? got = null;
+        using var arrived = new System.Threading.ManualResetEventSlim();
+        Action<JsonObject> onCmd = c => { got = c; arrived.Set(); };
+        EventChannel.Command += onCmd;
+        EventChannel.Start();
+        try
+        {
+            using var client = new System.IO.Pipes.NamedPipeClientStream(".", EventChannel.PipeName, System.IO.Pipes.PipeDirection.InOut);
+            client.Connect(3000);
+            var reader = new System.IO.StreamReader(client);
+            var writer = new System.IO.StreamWriter(client) { AutoFlush = true, NewLine = "\n" };
+            var hello = JsonNode.Parse(reader.ReadLine() ?? "{}");
+            writer.WriteLine("{\"cmd\":\"profile\",\"name\":\"x\"}");
+            bool ok = arrived.Wait(3000) && got?["name"]?.ToString() == "x";
+            EventChannel.Publish(new JsonObject { ["type"] = "snaptap", ["on"] = true });
+            var evt = JsonNode.Parse(reader.ReadLine() ?? "{}");
+            return hello?["type"]?.ToString() == "hello" && ok && evt?["type"]?.ToString() == "snaptap";
+        }
+        catch (Exception e)
+        {
+            Out.AppendLine("      canal: " + e.Message);
+            return false;
+        }
+        finally
+        {
+            EventChannel.Command -= onCmd;
+            EventChannel.Stop();
+        }
     }
 
     /// <summary>Read-only: lists what the hub finds and what each device answers to "get".</summary>

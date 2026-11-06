@@ -36,6 +36,7 @@ public partial class App : Application
         AppSettings.Load();
         if (first == "--self-test") return SelfTest.Run(args.Length > 1 ? args[1] : null);
         if (first == "--probe") return SelfTest.Probe(args.Length > 1 ? args[1] : null);
+        if (first == "--listen" && args.Length > 2) return SelfTest.Listen(args[1], double.TryParse(args[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double gap) ? gap : 3, args.Length > 3 ? args[3] : null);
         if (first == "--write-test" && args.Length > 1) return SelfTest.WriteTest(args[1], args.Length > 2 ? args[2] : null);
 
         bool screenshot = first == "--screenshot";
@@ -55,15 +56,23 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Write("fatal: " + e.ExceptionObject);
         TaskScheduler.UnobservedTaskException += (_, e) => { Log.Error("task", e.Exception); e.SetObserved(); };
 
-        if (screenshot) return app.Screenshot(args.Length > 1 ? args[1] : "screenshot.png", args.Length > 2 ? args[2] : "");
+        if (screenshot) return app.Screenshot(args.Length > 1 ? args[1] : "screenshot.png", args.Length > 2 ? args[2] : "", args.Length > 3 && double.TryParse(args[3], out double sc) ? sc : 0);
 
         Log.Write($"start {Version} ({string.Join(' ', args)}) from {AppContext.BaseDirectory}");
         if (first == Updater.AfterArg) Updater.MarkOpened();
         DeviceHub.Instance.Start();
+        Bridge.ShowWindow = page => app.Dispatcher.BeginInvoke(() =>
+        {
+            ShowWindow();
+            if (!string.IsNullOrEmpty(page)) Window?.Select(page);
+        });
+        Bridge.Start();
         SingleInstance.Listen(() => app.Dispatcher.BeginInvoke(ShowWindow), () => app.Dispatcher.BeginInvoke(Quit));
         app.Startup += (_, _) =>
         {
             CreateTray();
+            Hotkeys.Notify = text => Current.Dispatcher.BeginInvoke(() => Window?.Say(text, true));
+            Hotkeys.Start();
             _foreground = new ForegroundWatcher();
             _foreground.Changed += exe =>
             {
@@ -74,6 +83,9 @@ public partial class App : Application
             ScheduleUpdates();
         };
         int code = app.Run();
+        EventChannel.Stop();
+        Hotkeys.Stop();
+        Lighting.LightEngine.Instance.Stop();
         _tray?.Dispose();
         _foreground?.Dispose();
         DeviceHub.Instance.Dispose();
@@ -81,7 +93,7 @@ public partial class App : Application
         return code;
     }
 
-    private int Screenshot(string path, string page)
+    private int Screenshot(string path, string page, double scroll)
     {
         int code = 1;
         Startup += (_, _) =>
@@ -96,7 +108,12 @@ public partial class App : Application
             t.Tick += (_, _) =>
             {
                 t.Stop();
-                try { w.SaveScreenshot(path); code = 0; }
+                try
+                {
+                    if (scroll > 0) { w.ScrollPage(scroll); w.UpdateLayout(); }
+                    w.SaveScreenshot(path);
+                    code = 0;
+                }
                 catch (Exception e) { Log.Error("screenshot", e); }
                 Shutdown();
             };
@@ -169,6 +186,13 @@ public partial class App : Application
                 profiles.DropDownItems.Add(item);
             }
             menu.Items.Add(profiles);
+            var razer = DeviceHub.Instance.Gears.OfType<Devices.Razer.RazerKeyboard>().FirstOrDefault();
+            if (razer != null)
+            {
+                var snap = new Forms.ToolStripMenuItem("Snap Tap") { Checked = razer.SnapOn == true };
+                snap.Click += (_, _) => Hotkeys.Run(Hotkeys.SnapTap);
+                menu.Items.Add(snap);
+            }
             menu.Items.Add(new Forms.ToolStripSeparator());
             menu.Items.Add(Lang.T("Sair", "Quit"), null, (_, _) => Quit());
         };

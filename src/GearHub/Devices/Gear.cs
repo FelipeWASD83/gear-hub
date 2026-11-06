@@ -21,6 +21,13 @@ internal abstract class Gear : IDisposable
     /// <summary>Short line under the name in the sidebar (battery, mode...).</summary>
     public string Status { get; protected set; } = "";
 
+    /// <summary>Battery 0..100 when the device reports one, and whether it is charging.</summary>
+    public int? Battery { get; protected set; }
+    public bool Charging { get; protected set; }
+
+    /// <summary>The kind as the local channel spells it.</summary>
+    public string KindName => Kind.ToString().ToLowerInvariant();
+
     /// <summary>Raised from any thread when Status or what the page shows changed.</summary>
     public event Action<Gear>? Changed;
     protected void RaiseChanged() => Changed?.Invoke(this);

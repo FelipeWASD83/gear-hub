@@ -21,7 +21,21 @@ internal sealed class Page
     public StackPanel Root { get; } = new();
     private readonly Action<string, bool> _say;
     private readonly Dispatcher _ui;
-    public bool Closed { get; set; }
+    private bool _closed;
+
+    /// <summary>Set when the page leaves the window (another page, window closed); OnClose runs once then.</summary>
+    public bool Closed
+    {
+        get => _closed;
+        set
+        {
+            if (_closed || !value) return;
+            _closed = true;
+            try { OnClose?.Invoke(); } catch (Exception e) { Log.Error("page close", e); }
+        }
+    }
+
+    public event Action? OnClose;
 
     public Page(Action<string, bool> say)
     {

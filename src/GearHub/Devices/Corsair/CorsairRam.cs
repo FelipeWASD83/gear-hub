@@ -1,202 +1,132 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Threading;
 using System.Windows.Media;
+using GearHub.Lighting;
 using GearHub.Ui;
 
 namespace GearHub.Devices.Corsair;
 
 /// <summary>
-/// The Corsair RGB memory, through the CDCS service. While the hub holds the LEDs it keeps one session open (fixed
-/// colour once, breathing and rainbow drawn here at 25 frames a second); letting go closes the session and the
-/// modules go back to their own hardware lighting. The choice is kept in settings and taken again at start.
+/// The Corsair RGB memory, through the CDCS service, as a light target of the engine: Begin opens the session (the
+/// service may need starting; with iCUE open, iCUE may ask), Paint sends every LED, End closes the session and the
+/// modules go back to their own hardware lighting. Tested on 06/11/2026: "ffff0000" painted the modules red
+/// (aarrggbb), 1 device with 20 LEDs.
 /// </summary>
-internal sealed class CorsairRam : Gear
+internal sealed class CorsairRam : Gear, ILightTarget
 {
-    public const string Release = "module", Fixed = "fixed", Breathing = "breathing", Rainbow = "rainbow";
     private readonly object _gate = new();
     private CdcsClient? _client;
     private List<(int Dev, List<(int Id, double X, double Y)> Leds)> _targets = new();
-    private Thread? _animator;
-    private volatile bool _stop;
-    private string _mode = Release;
-    private Color _color = Colors.White;
     private string _name = "";
 
     public override string Key => "corsair-dram";
     public override string Name => _name != "" ? _name : Lang.T("Memória RAM Corsair", "Corsair RAM");
     public override string Brand => "Corsair";
     public override GearKind Kind => GearKind.Memory;
-    public string Mode => _mode;
+    public int MaxFps => 30;
 
     public static CorsairRam? Find() => CdcsClient.Installed() ? new CorsairRam() : null;
 
-    private CorsairRam()
+    private CorsairRam() => Status = Describe();
+
+    private string Describe()
     {
-        Parse(AppSettings.Current.RamColor, out _mode, out _color);
-        Status = Describe();
+        var spec = LightEngine.Instance.SpecFor(Key);
+        return spec == null ? Lang.T("efeito do pente", "module's own effect") : Effects.Name(spec.Effect).ToLowerInvariant();
     }
 
-    private static void Parse(string text, out string mode, out Color color)
-    {
-        mode = Release;
-        color = Colors.White;
-        if (string.IsNullOrEmpty(text)) return;
-        var parts = text.Split(':');
-        mode = parts[0] is Fixed or Breathing or Rainbow ? parts[0] : Release;
-        if (parts.Length > 1 && Page.TryParse(parts[1], out var c)) color = c;
-    }
-
-    private string Describe() => _mode switch
-    {
-        Fixed => Lang.T("cor fixa", "fixed colour"),
-        Breathing => Lang.T("respiração", "breathing"),
-        Rainbow => Lang.T("arco-íris", "rainbow"),
-        _ => Lang.T("efeito do pente", "module's own effect"),
-    };
-
-    /// <summary>Takes the choice saved last time (called once at start, off the interface thread).</summary>
-    public void Restore()
-    {
-        if (_mode != Release) Set(_mode, _color, save: false);
-    }
-
-    /// <summary>Switches mode; Release lets go of the LEDs. Blocks (pipe I/O). Returns an error text or null.</summary>
-    public string? Set(string mode, Color color, bool save = true)
+    public string? Begin()
     {
         lock (_gate)
         {
-            StopAnimation();
-            _mode = mode;
-            _color = color;
-            if (save)
+            if (_client is { Connected: true }) return null;
+            _client?.Dispose();
+            _client = CdcsClient.Connect();
+            if (_client == null)
+                return Lang.T("Não deu para falar com o serviço da Corsair (CORSAIR Device Control Service).", "Could not reach the Corsair service (CORSAIR Device Control Service).");
+            _client.SetPriority(2);
+            _targets = _client.Devices().Where(d => d.LedCount > 0).Select(d => (d.Id, _client.Leds(d.Id))).ToList();
+            if (_name == "" && _targets.Count > 0)
             {
-                AppSettings.Current.RamColor = mode == Release ? "" : $"{mode}:{Page.Hex(color)}";
-                AppSettings.Save();
+                string n = _client.Name(_targets[0].Dev);
+                if (n != "") _name = n;
             }
-            Status = Describe();
-            RaiseChanged();
-            if (mode == Release)
-            {
-                _client?.Dispose();
-                _client = null;
-                return null;
-            }
-            if (!EnsureClient(out string? error)) return error;
-            if (mode == Fixed) return Paint(_ => color) ? null : Lang.T("O serviço recusou a cor", "The service refused the colour");
-            _stop = false;
-            _animator = new Thread(Animate) { IsBackground = true, Name = "ram-effect", Priority = ThreadPriority.BelowNormal };
-            _animator.Start();
+            Log.Write($"cdcs: {_targets.Count} devices, {_targets.Sum(t => t.Leds.Count)} LEDs");
+            if (_targets.Count == 0) return Lang.T("O serviço não listou nenhuma memória.", "The service listed no memory.");
             return null;
         }
     }
 
-    private bool EnsureClient(out string? error)
+    /// <summary>LEDs of every module, left to right (position from the service's geometry, modules side by side).</summary>
+    public double[] LedPositions()
     {
-        error = null;
-        if (_client is { Connected: true }) return true;
-        _client?.Dispose();
-        _client = CdcsClient.Connect();
-        if (_client == null)
+        lock (_gate)
         {
-            error = Lang.T("Não deu para falar com o serviço da Corsair (CORSAIR Device Control Service).", "Could not reach the Corsair service (CORSAIR Device Control Service).");
-            return false;
-        }
-        _client.SetPriority(2);
-        _targets = _client.Devices().Where(d => d.LedCount > 0).Select(d => (d.Id, _client.Leds(d.Id))).ToList();
-        foreach (var t in _targets)
-            if (t.Leds.Count == 0) Log.Write($"cdcs: device {t.Dev} has no geometry");
-        if (_name == "" && _targets.Count > 0)
-        {
-            string n = _client.Name(_targets[0].Dev);
-            if (n != "") { _name = n; RaiseChanged(); }
-        }
-        Log.Write($"cdcs: {_targets.Count} devices, {_targets.Sum(t => t.Leds.Count)} LEDs");
-        if (_targets.Count == 0) { error = Lang.T("O serviço não listou nenhuma memória.", "The service listed no memory."); return false; }
-        return true;
-    }
-
-    /// <summary>Paints every LED with `f(position 0..1 from left to right)`.</summary>
-    private bool Paint(Func<double, Color> f)
-    {
-        if (_client == null) return false;
-        bool ok = true;
-        foreach (var (dev, leds) in _targets)
-        {
-            if (leds.Count == 0) continue;
-            double min = leds.Min(l => l.X), max = leds.Max(l => l.X);
-            double span = Math.Max(1e-6, max - min);
-            ok &= _client.SetColors(dev, leds.Select(l =>
-            {
-                var c = f((l.X - min) / span);
-                return (l.Id, c.R, c.G, c.B);
-            }));
-        }
-        return ok;
-    }
-
-    private void Animate()
-    {
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        while (!_stop)
-        {
-            double t = clock.Elapsed.TotalSeconds;
-            try
-            {
-                if (_mode == Breathing)
-                {
-                    double k = 0.08 + 0.92 * (0.5 - 0.5 * Math.Cos(t * Math.PI * 2 / 4.0));
-                    var c = Color.FromRgb((byte)(_color.R * k), (byte)(_color.G * k), (byte)(_color.B * k));
-                    Paint(_ => c);
-                }
-                else Paint(x => Hue((x * 0.6 + t / 6.0) % 1.0));
-            }
-            catch (Exception e)
-            {
-                Log.Error("ram effect", e);
-                return;
-            }
-            Thread.Sleep(40);
+            var all = Ordered();
+            int n = all.Count;
+            return Enumerable.Range(0, n).Select(i => n <= 1 ? 0.5 : i / (double)(n - 1)).ToArray();
         }
     }
 
-    private void StopAnimation()
+    private List<(int Dev, int Led)> Ordered() =>
+        _targets.SelectMany(t => t.Leds.OrderBy(l => l.X).ThenBy(l => l.Y).Select(l => (t.Dev, l.Id))).ToList();
+
+    public void Paint(Color[] colors)
     {
-        _stop = true;
-        _animator?.Join(500);
-        _animator = null;
+        lock (_gate)
+        {
+            if (_client == null) return;
+            var all = Ordered();
+            foreach (var g in all.Select((l, i) => (l.Dev, l.Led, C: colors[Math.Min(i, colors.Length - 1)])).GroupBy(x => x.Dev))
+                _client.SetColors(g.Key, g.Select(x => (x.Led, x.C.R, x.C.G, x.C.B)));
+        }
     }
 
-    private static Color Hue(double h)
+    public void End()
     {
-        double r = Math.Clamp(Math.Abs(h * 6 - 3) - 1, 0, 1);
-        double g = Math.Clamp(2 - Math.Abs(h * 6 - 2), 0, 1);
-        double b = Math.Clamp(2 - Math.Abs(h * 6 - 4), 0, 1);
-        return Color.FromRgb((byte)(r * 255), (byte)(g * 255), (byte)(b * 255));
+        lock (_gate)
+        {
+            _client?.Dispose();
+            _client = null;
+        }
     }
 
     /// <summary>Test only: holds the LEDs and paints them with a raw colour string.</summary>
     public string? PaintRaw(string color)
     {
+        string? e = Begin();
+        if (e != null) return e;
         lock (_gate)
         {
-            StopAnimation();
-            if (!EnsureClient(out string? error)) return error;
             bool ok = true;
             foreach (var (dev, leds) in _targets) ok &= _client!.SetColorsRaw(dev, leds.Select(l => l.Id), color);
             return ok ? null : "recusado";
         }
     }
 
-    public override JsonObject? Capture() => new() { ["mode"] = _mode, ["color"] = Page.Hex(_color) };
+    public override void Poll()
+    {
+        string s = Describe();
+        if (s != Status) { Status = s; RaiseChanged(); }
+    }
+
+    public override JsonObject? Capture()
+    {
+        var spec = LightEngine.Instance.SpecFor(Key);
+        return new JsonObject { ["light"] = System.Text.Json.JsonSerializer.SerializeToNode(spec ?? new EffectSpec { Effect = Effects.Off }) };
+    }
 
     public override void Apply(JsonObject s)
     {
-        string mode = s["mode"]?.ToString() ?? Release;
-        Color c = Page.TryParse(s["color"]?.ToString() ?? "", out var parsed) ? parsed : _color;
-        if (mode != _mode || c != _color) Set(mode, c);
+        var spec = s["light"]?.Deserialize<EffectSpec>();
+        if (spec == null) return;
+        var now = LightEngine.Instance.SpecFor(Key);
+        if (now == null || !now.SameAs(spec)) LightEngine.Instance.Set(this, spec);
+        Status = Describe();
+        RaiseChanged();
     }
 
     public override void BuildPage(Page p)
@@ -206,33 +136,9 @@ internal sealed class CorsairRam : Gear
         if (VendorApps.Icue)
             p.Note(p.Root, Lang.T("O iCUE está aberto. Na primeira vez ele pergunta se libera a memória para outro programa: aceite lá. Para não perguntar mais, nas configurações da memória no iCUE ponha \"CORSAIR RGB DRAM Service Access\" em On. Também dá para fechar o iCUE: o serviço continua.",
                 "iCUE is open. The first time it asks whether another app may drive the memory: accept it there. To stop the question, set \"CORSAIR RGB DRAM Service Access\" to On in iCUE's memory settings. You can also close iCUE: the service keeps running."), true);
-        var sec = p.Section(Lang.T("Luz", "Lighting"), Lang.T("\"Do pente\" solta a luz: os pentes voltam ao efeito gravado neles.",
-            "\"Module\" lets go: the modules go back to the effect stored in them."));
-        string[] modes = { Release, Fixed, Breathing, Rainbow };
-        string[] labels = { Lang.T("Do pente", "Module"), Lang.T("Fixa", "Fixed"), Lang.T("Respiração", "Breathing"), Lang.T("Arco-íris", "Rainbow") };
-        Color color = _color;
-        string mode = _mode;
-        void Go(string m, Color c)
-        {
-            p.Say(Lang.T("Falando com o serviço...", "Talking to the service..."));
-            p.Work(() => Set(m, c), err => p.Say(err ?? labels[Array.IndexOf(modes, m)], err == null));
-        }
-        p.Row(sec, Lang.T("Efeito", "Effect"), null, p.Segments(labels, Array.IndexOf(modes, mode), i => { mode = modes[i]; Go(mode, color); }));
-        p.Row(sec, Lang.T("Cor", "Colour"), Lang.T("Vale para fixa e respiração.", "For fixed and breathing."), p.ColorPick(color, c =>
-        {
-            color = c;
-            if (mode is Release or Rainbow) mode = Fixed;
-            Go(mode, color);
-        }));
+        EffectsPanel.Build(p, new ILightTarget[] { this }, Lang.T("\"Do pente\" solta a luz: os pentes voltam ao efeito gravado neles.",
+            "\"Module\" lets go: the modules go back to the effect stored in them."), () => { Status = Describe(); RaiseChanged(); });
     }
 
-    public override void Dispose()
-    {
-        lock (_gate)
-        {
-            StopAnimation();
-            _client?.Dispose();
-            _client = null;
-        }
-    }
+    public override void Dispose() => End();
 }

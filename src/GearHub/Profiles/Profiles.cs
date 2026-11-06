@@ -117,6 +117,7 @@ internal static class ProfileStore
                 }
                 Active = p.Name;
                 Changed?.Invoke();
+                Signals.RaiseProfile(p, reason);
             }
             finally { Applying.Release(); }
         });

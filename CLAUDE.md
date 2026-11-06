@@ -97,6 +97,39 @@ inglês; este arquivo, o CHANGELOG e os commits em português; README em inglês
   da frente ou ao controlador de fundo) e `RawGameController` para bateria. **Armadilha:** `FindAsync` com
   `ConfigureAwait(false)`; esperar o resultado na thread da janela travava (a página de Perfis não abria).
 
+## 1.1.0 (06/11/2026, pedido dele: desenho do switch, LED animado, câmera, ilha, "pode inventar")
+
+- **Canal local** (`Core/EventChannel.cs`, `Core/Bridge.cs`, contrato em `docs/canal-local.md`): pipe
+  `\\.\pipe\GearHub.Events` só do usuário, uma linha JSON por mensagem. Testado com o Gear Hub instalado e a ilha
+  4.3.0 (módulo `perifericos`): a ilha conecta sozinha ("Gear Hub 1.1.0 conectado"), e o cliente `--listen <arquivo de
+  comandos> <segundos> <saída>` confirmou pedido e aviso nos dois sentidos. **Cliente de teste em PowerShell ou Python
+  com handle síncrono trava** (ler e escrever no mesmo pipe fica em fila): usar o `--listen`. Mudar algo de propósito
+  (Snap Tap, perfil) é escrita no aparelho dele.
+- **Motor de luz** (`Lighting/LightEngine.cs`, `Effects.cs`): efeitos de software por posição do LED e tempo, uma
+  thread, RAM a 30 qps e zonas da Logitech a 15, efeito parado pintado uma vez e repetido a cada 10 s. O que cada
+  aparelho roda fica em `settings.json` (`lights`) e volta ao abrir e quando o aparelho volta; a `ramColor` da 1.0.0
+  é convertida uma vez. RAM e G733 animaram com ele olhando (arco-íris, cometa, fogo). A luz do G502 segue com a
+  Iluminação Dinâmica (aviso na página). Música: `Lighting/AudioLevel.cs` (o loopback do Fundo Vivo sem FFT, nível e
+  grave com ganho automático), ligado só enquanto um efeito pede. **CPU com efeito rodando não foi medida direito**
+  (o teste leu `TotalProcessorTime` sem `Refresh`); medir com o app aberto.
+- **Efeitos do teclado** (Chroma `0F 02`/`0F 82`: `[perfil 1, região 0, efeito, flags, velocidade, n cores, rgb...]`,
+  tamanho 6 + 3 por cor): aceitos fixo 1, respiração 2 (flags 2 = duas cores, 1 = uma), espectro 3, onda 4 (velocidade
+  é atraso, 40 normal, flags 1), reativo 5, ondulação 6 e estrelas 7 (velocidade 1 a 3; com 40 o teclado recusa). Fogo 9
+  e roda 12 respondem status 3 neste teclado (fora da lista; "sincronizar" usa respiração laranja no lugar do fogo).
+  Onda testada com ele.
+- **Profundidade ao vivo** (`02 9C [0, tecla]`, palavra em `[2..3]`): calibrada com ele: solta = 0, no fundo = 65535,
+  a mesma escala dos limites (0..4 mm). Só lê com a página aberta e a chave "Ao vivo" ligada (disputa a interface com
+  o Synapse).
+- **Câmera** (`Webcam/CameraPreview.cs`): MediaCapture + MediaFrameReader em BGRA, até 1280 de largura, controle
+  exclusivo e, se outro programa estiver usando, só leitura. Funcionou com ele (imagem e zoom ao vivo).
+- **Visão geral, Luzes, atalhos globais** (`Core/Hotkeys.cs`, `RegisterHotKey`), **medidor de taxa do mouse**
+  (`Ui/MouseRate.cs`, raw input na janela por 3 s, mediana dos intervalos), Snap Tap na bandeja. Atalhos e medidor
+  sem teste com ele.
+- **Armadilha que custou caro no teste:** o Synapse troca o perfil vivo (o "SnapTapLess" dele não tem Snap Tap) e
+  o Gear Hub não vê a troca. Antes de "devolver" o Snap Tap num teste, ler o perfil ativo do Synapse (o log
+  `systray_systrayv*.log` ou a linha `teclado: perfil` do `ilha.log`). Em 06/11/2026 um teste religou o Snap Tap
+  com ele no Rocket League em SnapTapLess (corrigido em ~4 min).
+
 ## Decisões que não se desfazem sem motivo
 
 - Nada de kernel, driver novo, modo de teste ou ring 0 (regra dele). A RAM só funciona pelo serviço da Corsair por isso.
