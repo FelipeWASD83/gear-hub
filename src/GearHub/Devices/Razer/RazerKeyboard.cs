@@ -102,8 +102,8 @@ internal sealed class RazerKeyboard : Gear
     [System.Runtime.InteropServices.DllImport("winmm.dll")] private static extern uint timeBeginPeriod(uint ms);
     [System.Runtime.InteropServices.DllImport("winmm.dll")] private static extern uint timeEndPeriod(uint ms);
 
-    public SnapTapState? ReadSnapTap() =>
-        Command(RazerProtocol.GetSnapTap, new[] { RazerProtocol.LiveSlot }) is { } d ? RazerProtocol.ParseSnapTap(d) : null;
+    public SnapTapState? ReadSnapTap(byte slot = RazerProtocol.LiveSlot) =>
+        Command(RazerProtocol.GetSnapTap, new[] { slot }) is { } d ? RazerProtocol.ParseSnapTap(d) : null;
 
     /// <summary>The last Snap Tap state read or written (null until known).</summary>
     public bool? SnapOn { get; private set; }
@@ -130,12 +130,12 @@ internal sealed class RazerKeyboard : Gear
         return st != null && WriteSnapTap(on, st.Used);
     }
 
-    public List<KeyActuation> ReadActuation(IReadOnlyList<byte> keys)
+    public List<KeyActuation> ReadActuation(IReadOnlyList<byte> keys, byte slot = RazerProtocol.LiveSlot)
     {
         var all = new List<KeyActuation>();
         foreach (var chunk in keys.Chunk(RazerProtocol.ActuationPerCall))
         {
-            var q = RazerProtocol.ActuationQuery(RazerProtocol.LiveSlot, chunk);
+            var q = RazerProtocol.ActuationQuery(slot, chunk);
             if (Command(RazerProtocol.GetActuation, q, q.Length) is { } d) all.AddRange(RazerProtocol.ParseActuation(d));
         }
         return all;
@@ -144,6 +144,7 @@ internal sealed class RazerKeyboard : Gear
     public bool WriteActuation(IReadOnlyList<KeyActuation> keys)
     {
         RememberActuation(keys.Select(k => k.Key));
+        Log.Write($"razer: writing actuation of {keys.Count} key(s) ({string.Join(" ", keys.Take(6).Select(k => $"{RazerProtocol.KeyName(k.Key)}={k.PressMm}"))}{(keys.Count > 6 ? " ..." : "")}){(_restoring ? " [giving back]" : "")}");
         bool ok = true;
         foreach (var chunk in keys.Chunk(RazerProtocol.ActuationPerCall))
         {
@@ -153,12 +154,12 @@ internal sealed class RazerKeyboard : Gear
         return ok;
     }
 
-    public List<KeyRapidTrigger> ReadRapid(IReadOnlyList<byte> keys)
+    public List<KeyRapidTrigger> ReadRapid(IReadOnlyList<byte> keys, byte slot = RazerProtocol.LiveSlot)
     {
         var all = new List<KeyRapidTrigger>();
         foreach (var chunk in keys.Chunk(RazerProtocol.RapidPerCall))
         {
-            var q = RazerProtocol.RapidQuery(RazerProtocol.LiveSlot, chunk);
+            var q = RazerProtocol.RapidQuery(slot, chunk);
             if (Command(RazerProtocol.GetRapidTrigger, q, q.Length) is { } d) all.AddRange(RazerProtocol.ParseRapid(d));
         }
         return all;
@@ -167,6 +168,7 @@ internal sealed class RazerKeyboard : Gear
     public bool WriteRapid(IReadOnlyList<KeyRapidTrigger> keys)
     {
         RememberRapid(keys.Select(k => k.Key));
+        Log.Write($"razer: writing rapid trigger of {keys.Count} key(s){(_restoring ? " [giving back]" : "")}");
         bool ok = true;
         foreach (var chunk in keys.Chunk(RazerProtocol.RapidPerCall))
         {
@@ -394,7 +396,7 @@ internal sealed class RazerKeyboard : Gear
         return done.Count > 0 ? $"{Name}: " + string.Join(", ", done) : null;
     }
 
-    private static IReadOnlyList<byte> AllKeys => RazerProtocol.Keys.Select(k => k.Id).ToList();
+    public static IReadOnlyList<byte> AllKeys => RazerProtocol.Keys.Select(k => k.Id).ToList();
 
     // ---- profiles ----
 
@@ -488,6 +490,7 @@ internal sealed class RazerKeyboard : Gear
             BuildSnapTap(p, s);
             BuildAnalog(p, s);
             BuildLight(p);
+            BuildStored(p);
             BuildOther(p, s);
         });
     }
@@ -744,6 +747,65 @@ internal sealed class RazerKeyboard : Gear
             rowB = p.Row(sec, Lang.T("Segunda cor", "Second colour"), null, p.ColorPick(b, c => { b = c; Send(); }));
             rowSpeed = p.Row(sec, Lang.T("Velocidade", "Speed"), null, p.Slider(0.25, 3, 0.25, speed, v => $"{v:0.##}x", v => { speed = v; Send(); }));
             Rows();
+        });
+    }
+
+
+    /// <summary>A profile stored in the keyboard (slots 2..5 hold Synapse's onboard copies; 1 is the live one).</summary>
+    public sealed record StoredSlot(byte Slot, double Letters, double Others, int RapidOn, double RapidMm, bool Snap);
+
+    private static readonly HashSet<byte> LetterKeys = RazerProtocol.Keys.Where(k => k.Name.Length == 1 && char.IsLetter(k.Name[0])).Select(k => k.Id).ToHashSet();
+
+    public StoredSlot? ReadSlot(byte slot)
+    {
+        var act = ReadActuation(AllKeys, slot);
+        var rt = ReadRapid(AllKeys, slot);
+        var st = ReadSnapTap(slot);
+        if (act.Count == 0) return null;
+        double Typical(IEnumerable<KeyActuation> a) => a.Select(x => x.PressMm).GroupBy(v => v).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
+        var on = rt.Where(r => r.Enabled).ToList();
+        return new StoredSlot(slot, Typical(act.Where(a => LetterKeys.Contains(a.Key))), Typical(act.Where(a => !LetterKeys.Contains(a.Key))),
+            on.Count, on.Count > 0 ? on.GroupBy(r => r.DownMm).OrderByDescending(g => g.Count()).First().Key : 0, st?.Enabled == true);
+    }
+
+    /// <summary>
+    /// Copies a stored slot's actuation, rapid trigger and Snap Tap into the live slot (what Synapse does on a profile
+    /// switch). Used on 06/11/2026 when the live slot had 1.2 mm everywhere and his SnapTapLess (slot 4) did not.
+    /// </summary>
+    public bool UseSlot(byte slot)
+    {
+        var act = ReadActuation(AllKeys, slot);
+        var rt = ReadRapid(AllKeys, slot);
+        var st = ReadSnapTap(slot);
+        if (act.Count == 0 || st == null) return false;
+        Log.Write($"razer: copying stored slot {slot} into the live slot");
+        return WriteActuation(act) & WriteRapid(rt) & WriteSnapTap(st.Enabled, st.Used);
+    }
+
+    private void BuildStored(Page p)
+    {
+        var sec = p.Section(Lang.T("Perfis guardados no teclado", "Profiles stored in the keyboard"),
+            Lang.T("O Synapse guarda uma cópia de cada perfil no teclado. Se o que está valendo agora ficou diferente do que você configurou, \"Usar este\" copia um deles para o que vale (o mesmo que o Synapse faz ao trocar de perfil).",
+                "Synapse keeps a copy of each profile in the keyboard. If what counts right now is not what you set, \"Use this\" copies one of them into the live profile (what Synapse does on a profile switch)."));
+        var loading = p.Note(sec, Lang.T("Lendo os perfis guardados...", "Reading the stored profiles..."));
+        p.Work(() => Enumerable.Range(1, 5).Select(i => ReadSlot((byte)i)).Where(s => s != null).Select(s => s!).ToList(), slots =>
+        {
+            sec.Children.Remove(loading);
+            foreach (var s in slots)
+            {
+                var slot = s;
+                string desc = Lang.T($"letras {Page.Mm(s.Letters)}, outras {Page.Mm(s.Others)}, rapid trigger ", $"letters {Page.Mm(s.Letters)}, others {Page.Mm(s.Others)}, rapid trigger ")
+                    + (s.RapidOn > 0 ? Page.Mm(s.RapidMm) : Lang.T("desligado", "off")) + ", Snap Tap " + (s.Snap ? Lang.T("ligado", "on") : Lang.T("desligado", "off"));
+                string name = s.Slot == RazerProtocol.LiveSlot ? Lang.T("Valendo agora", "Live now") : Lang.T($"Guardado {s.Slot}", $"Stored {s.Slot}");
+                UIElement control = s.Slot == RazerProtocol.LiveSlot
+                    ? new TextBlock { Text = Lang.T("é o que as teclas fazem", "what the keys do"), Style = Page.S("Small"), VerticalAlignment = VerticalAlignment.Center }
+                    : p.Button(Lang.T("Usar este", "Use this"), () =>
+                    {
+                        p.Say(Lang.T("Copiando...", "Copying..."));
+                        p.Work(() => UseSlot(slot.Slot), ok => { p.Say(ok ? Lang.T($"Valendo agora: guardado {slot.Slot}", $"Live now: stored {slot.Slot}") : Lang.T("O teclado recusou", "The keyboard refused"), ok); if (ok) App.Window?.Select(Key); });
+                    });
+                p.Row(sec, name, desc, control);
+            }
         });
     }
 

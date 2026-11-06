@@ -142,6 +142,24 @@ inglês; este arquivo, o CHANGELOG e os commits em português; README em inglês
 - Testado em 06/11/2026 (`--write-test restore`): W de 1,2 para 1,7 mm e polling 8 kHz → 1 kHz, devolvidos iguais
   ao SnapTapLess dele. Processo morto (Gerenciador de Tarefas, queda) não devolve nada.
 
+## 1.3.0: perfis guardados no teclado (06/11/2026)
+
+- Ele reclamou que o teclado estava "bem diferente do que eu configurei": no SnapTapLess as letras ficam em 2,0 mm, o
+  resto em 2,5, rapid trigger ligado e Snap Tap desligado, e o slot vivo (1) estava com **1,2 mm em todas as teclas e
+  rapid trigger desligado**. Os comandos de atuação, rapid trigger e Snap Tap aceitam qualquer slot: lidos 0 a 5,
+  o **slot 4 tinha o SnapTapLess certinho** (letras 2,0, outras 2,5, RT 0,4, snap desligado), o 3 parece o Good One
+  (RT 0,5, snap ligado), o 2 tem tudo 2,0 e o 5 tudo 4,0. O slot 0 também está em 1,2 em tudo (parece o padrão de
+  fábrica). Copiado o 4 para o 1 e conferido tecla a tecla.
+- **Causa não achada.** Nem o Gear Hub nem os testes gravam todas as teclas (o `restore` das 17:38 só mexeu no W, que
+  já estava em 1,2 antes). Hipótese, não confirmada: o teclado voltou o slot vivo ao padrão (o mesmo 1,2 do slot 0)
+  numa reconexão e o Synapse não regravou porque o perfil não mudou. Desde a 1.3.0 o log anota toda escrita de
+  atuação e rapid trigger (`razer: writing ...`, `[giving back]` quando é a devolução); se acontecer de novo, o log diz
+  se foi o Gear Hub.
+- Página do teclado, seção "Perfis guardados no teclado" (`BuildStored`): lê os slots 1 a 5 (`ReadSlot`: valor mais
+  comum das letras e das outras teclas, RT e snap) e "Usar este" copia o slot para o vivo (`UseSlot`, o que o
+  `--write-test use-slot` testa com o slot 4). **Qual slot é qual perfil do Synapse não se sabe ao certo** (o
+  `05 81` lista 6 perfis sem nome), por isso a tela diz "Guardado N" e mostra os valores.
+
 ## Decisões que não se desfazem sem motivo
 
 - Nada de kernel, driver novo, modo de teste ou ring 0 (regra dele). A RAM só funciona pelo serviço da Corsair por isso.

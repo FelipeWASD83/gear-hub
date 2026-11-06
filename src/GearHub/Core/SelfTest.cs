@@ -153,6 +153,18 @@ internal static class SelfTest
                     Line($"agora: W {after.PressMm} mm (antes {before.PressMm}), polling {razer.ReadPolling()} Hz (antes {pollBefore}) -> {(after == before && razer.ReadPolling() == pollBefore ? "IGUAL AO ANTES" : "DIFERENTE")}");
                     break;
                 }
+                case "use-slot" when razer != null:
+                {
+                    // copies a stored slot into the live one (slot 4, his SnapTapLess on 06/11/2026) and checks the live slot matches it
+                    const byte slot = 4;
+                    Line($"antes:  {razer.ReadSlot(1)}");
+                    Line($"slot {slot}: {razer.ReadSlot(slot)}");
+                    bool ok = razer.UseSlot(slot);
+                    var src = razer.ReadActuation(RazerKeyboard.AllKeys, slot);
+                    var live = razer.ReadActuation(RazerKeyboard.AllKeys);
+                    Line($"UseSlot={ok}; depois: {razer.ReadSlot(1)}; atuação igual tecla a tecla: {src.SequenceEqual(live)}");
+                    break;
+                }
                 case "depth" when razer != null:
                 {
                     // announced: keys released for 3 s, then hold W all the way down, then halfway, then let go

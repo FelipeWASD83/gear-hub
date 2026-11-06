@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0 (06/11/2026)
+
+**Novo**
+
+- Na página do teclado, a seção "Perfis guardados no teclado" mostra o que vale agora e as cópias que o Synapse guarda dentro do teclado (atuação das letras e das outras teclas, rapid trigger e Snap Tap de cada uma). "Usar este" passa uma delas para o que vale, o mesmo que o Synapse faz ao trocar de perfil. Serve para quando o teclado fica com um acionamento diferente do que você configurou.
+- O registro do Gear Hub anota cada vez que ele grava atuação ou rapid trigger no teclado, para dar para saber de onde veio uma mudança.
+
 ## 1.2.0 (06/11/2026)
 
 **Novo**
