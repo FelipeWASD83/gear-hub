@@ -180,8 +180,10 @@ inglês; este arquivo, o CHANGELOG e os commits em português; README em inglês
   Snap Tap) vira o slot daquele perfil. `UseSlot` grava com `_repairing` (não entra no que se devolve ao sair; na
   1.3.0 o "Usar este" seria desfeito ao fechar).
 - Testado em 06/11/2026 com `--write-test guard`: aprendeu SnapTapLess = slot 4, todas as teclas em 1,2 de propósito, a
-  guarda copiou o slot 4 e a comparação tecla a tecla deu igual. **Não testado:** uma troca de perfil real com o
-  silêncio (precisa dele trocando no Synapse).
+  guarda copiou o slot 4 e a comparação tecla a tecla deu igual. **Troca real testada com ele às 19:05:** Good One e
+  de volta SnapTapLess, o Gear Hub viu as duas no log (~0,5 s antes da ilha), ficou quieto, e o teclado terminou igual
+  ao slot 4 tecla a tecla. Ficando menos de 16 s num perfil, a guarda não aprende aquele perfil (aprende quando ele
+  fica); o Good One ainda não estava aprendido no fim desse teste.
 
 ## Decisões que não se desfazem sem motivo
 
